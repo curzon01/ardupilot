@@ -84,28 +84,29 @@ static int16_t _hott_climb_rate3s;
 static int16_t _hott_climb_rate10s;
 
 #ifdef HOTT_SIM_VARIO_SENSOR
-const char hott_flight_mode_strings[NUM_MODES+1][10] PROGMEM = {
-    "Stabilize",	// 0
-    "Acro",			// 1
-    "AltHold",		// 2
-    "Auto",			// 3
-    "Guided",		// 4
-    "Loiter",		// 5
-    "RTL",			// 6
-    "Circle",		// 7
-    "Position",		// 8
-    "Land",			// 9
-    "Of-Loiter",	// 10
-    "Drift",		// 11
-    "Toy M",		// 12
-    "Sport",		// 13
-    "???"
+#define NUM_MODES 16
+const char hott_flight_mode_strings[NUM_MODES+1][11] PROGMEM = {
+    "Manual",		// 0
+    "Circle",		// 1
+    "Stabilize",	// 2
+    "Training",		// 3
+    "Acro",			// 4
+    "FlyByWireA",	// 5
+    "FlyByWireB",	// 6
+    "Cruise",		// 7
+    "unknown",		// 8
+    "unknown",		// 9
+    "Auto",			// 10
+    "RTL",			// 11
+    "Loiter",		// 12
+    "unknown",		// 13
+    "unknown",		// 14
+    "Guided",		// 15
+    "Initalize"		// 16
 };
 const char hott_ARMED_STR[] PROGMEM			= "ARMED";
 const char hott_DISARMED_STR[] PROGMEM		= "DISARMED";
 const char hott_normal_STR[] PROGMEM		= "-";
-const char hott_simple_STR[] PROGMEM		= "Simple";
-const char hott_supersimple_STR[] PROGMEM	= "SSimple";
 #endif
 
 
@@ -701,7 +702,7 @@ void _hott_check_serial_data(uint32_t tnow) {
 #ifdef HOTT_SIM_TEXTMODE
             case HOTT_TEXT_MODE_REQUEST_ID:
            //Text mode, handle only if not armed!
-           if(!motors.armed()) {
+           if(!arming.is_armed()) {
 				hott_txt_msg.start_byte = 0x7b;
 				hott_txt_msg.stop_byte = 0x7d;
 				uint8_t tmp = (addr >> 4);  // Sensor type
@@ -834,7 +835,7 @@ void _hott_update_gam_msg() {
 
 	hott_gam_msg.altitude = hott_calc_altitude();
 
-	hott_gam_msg.climbrate = (int)climb_rate + 30000;
+	hott_gam_msg.climbrate = (int)barometer.get_climb_rate() + 30000;
   	hott_gam_msg.climbrate3s = (_hott_climb_rate3s / 100) + 120;
 
 	hott_gam_msg.current = (int)(battery.current_amps() * 10.0);
@@ -847,7 +848,7 @@ void _hott_update_gam_msg() {
 	hott_gam_msg.speed = ((float)(g_gps->ground_speed_cm * 0.036));
 
     //display ON when motors are armed
-    if (motors.armed()) {
+    if (arming.is_armed()) {
     	hott_gam_msg.alarm_invers2 |= 0x80;
     } else {
         hott_gam_msg.alarm_invers2 &= 0x7f;
@@ -914,11 +915,11 @@ void _hott_update_eam_msg() {
 	hott_eam_msg.batt_cap = battery.current_total_mah() / 10;
 	hott_eam_msg.speed = ((float)(g_gps->ground_speed_cm * 0.036));
 
-	hott_eam_msg.climbrate = (int)climb_rate + 30000;
+	hott_eam_msg.climbrate = (int)barometer.get_climb_rate() + 30000;
   	hott_eam_msg.climbrate3s = (_hott_climb_rate3s / 100) + 120;
 
     //display ON when motors are armed
-    if (motors.armed()) {
+    if (arming.is_armed()) {
        hott_eam_msg.alarm_invers2 |= 0x80;
     }
     else {
@@ -950,28 +951,6 @@ void _hott_update_gps_msg() {
 	}
 
 	
-	int32_t dist;
-	switch(control_mode) {
-		case AUTO:
-			//Use home direction field to display direction an distance to next waypoint
-			dist = wp_nav.get_distance_to_target(); // get_distance_cm(&current_loc, &next_WP);
-			hott_gps_msg.home_direction = wp_nav.get_bearing_to_target() / 200; // get_bearing_cd(&current_loc, &next_WP) / 200; //get_bearing() return value in degrees * 100
-			//Display WP to mark the change of meaning!
-			hott_gps_msg.free_char1 ='W';
-			hott_gps_msg.free_char2 ='P';
-			break;
-
-		default:
-			//Display Home direction and distance
-			Vector3f curr = inertial_nav.get_position();
-			dist = pythagorous2(curr.x, curr.y); // get_distance_cm(&current_loc, &home);
-			hott_gps_msg.home_direction = pv_get_bearing_cd(curr,Vector3f(0,0,0)) / 200; // get_bearing_cd(&current_loc, &home) / 200; //get_bearing() return value in degrees * 100
-			hott_gps_msg.free_char1 = ' ';
-			hott_gps_msg.free_char2 = ' ';
-			break;
-	}
-	hott_gps_msg.home_distance = dist < 0 ? 0 : dist / 100;
-
 	//int deg;
 	//int secs;
 	// Latitude
@@ -988,7 +967,7 @@ void _hott_update_gps_msg() {
 
 	hott_gps_msg.altitude = hott_calc_altitude();
 
-	hott_gps_msg.climbrate = 30000 + climb_rate;
+	hott_gps_msg.climbrate = 30000 + barometer.get_climb_rate();
 	hott_gps_msg.climbrate3s = (_hott_climb_rate3s / 100) + 120;
 
 	hott_gps_msg.gps_satelites = (int8_t)g_gps->num_sats;
@@ -1031,7 +1010,7 @@ void _hott_update_vario_msg() {
 		_hott_min_altitude = hott_vario_msg.altitude;
 	hott_vario_msg.altitude_min = _hott_min_altitude;
 
-	hott_vario_msg.climbrate    = climb_rate + 30000;
+	hott_vario_msg.climbrate    = barometer.get_climb_rate() + 30000;
 	hott_vario_msg.climbrate3s  = _hott_climb_rate3s + 30000;
 	hott_vario_msg.climbrate10s = _hott_climb_rate10s + 30000;
 
@@ -1039,25 +1018,18 @@ void _hott_update_vario_msg() {
 
 	//Free text processing
 	if(control_mode > NUM_MODES) {
-		control_mode = NUM_MODES;
+		control_mode = INITIALISING;
 	}
 
-	if (motors.armed()) {
+	if (arming.is_armed()) {
 		pArmedStr = (char *)hott_ARMED_STR;
     }
     else {
 		pArmedStr = (char *)hott_DISARMED_STR;
     }
 
-	if (ap.simple_mode == 1) {
-		psimpleStr = (char *)hott_simple_STR;
-	}
-	else if (ap.simple_mode == 2) {
-		psimpleStr = (char *)hott_supersimple_STR;
-	}
-	else {
-		psimpleStr = (char *)hott_normal_STR;
-	}
+	psimpleStr = (char *)hott_normal_STR;
+	
 	//clear line
 	memset(hott_vario_msg.text_msg,0x20,HOTT_VARIO_MSG_TEXT_LEN);
 	int len1=strlen_P(pArmedStr);
@@ -1096,7 +1068,7 @@ void _hott_store_climb_rate() {
 	if( ptr>=10 ) {
 		ptr = 0;
 	}
-	_hott_climb_rates[ptr++] = climb_rate;
+	_hott_climb_rates[ptr++] = barometer.get_climb_rate();
 
 	int16_t _hott_climb_sum = 0;
 	int tmpptr = ptr;
