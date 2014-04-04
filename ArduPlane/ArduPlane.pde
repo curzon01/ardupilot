@@ -1,6 +1,6 @@
 /// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
-#define THISFIRMWARE "ArduPlane V2.78"
+#define THISFIRMWARE "ArduPlane V2.78 (Hott V0.9.9.5)"
 /*
    Lead developer: Andrew Tridgell
  
@@ -738,6 +738,21 @@ static const AP_Scheduler::Task scheduler_tasks[] PROGMEM = {
     { compass_save,        3000,   2500 },
     { update_logging1,        5,   1700 },
     { update_logging2,        5,   1700 },
+#ifdef USERHOOK_FASTLOOP
+    { userhook_FastLoop,      1,    100 },
+#endif
+#ifdef USERHOOK_50HZLOOP
+    { userhook_50Hz,          2,    100 },
+#endif
+#ifdef USERHOOK_MEDIUMLOOP
+    { userhook_MediumLoop,   10,    100 },
+#endif
+#ifdef USERHOOK_SLOWLOOP
+    { userhook_SlowLoop,     30,    100 },
+#endif
+#ifdef USERHOOK_SUPERSLOWLOOP
+    { userhook_SuperSlowLoop,100,   100 },
+#endif
 };
 
 // setup the var_info table
