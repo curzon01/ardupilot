@@ -1,3 +1,4 @@
+// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 /*
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,134 +21,69 @@
  *       datasheet: http://www.maxbotix.com/documents/I2CXL-MaxSonar-EZ_Datasheet.pdf
  *
  *       Sensor should be connected to the I2C port
+ *
+ *       Variables:
+ *               bool healthy : indicates whether last communication with sensor was successful
+ *
+ *       Methods:
+ *               take_reading(): ask the sonar to take a new distance measurement
+ *               read() : read last distance measured (in cm)
+ *
  */
+
+// AVR LibC Includes
 #include "AP_RangeFinder_MaxsonarI2CXL.h"
-
-#include <utility>
-
-#include <AP_HAL/AP_HAL.h>
-#include <AP_HAL/utility/sparse-endian.h>
+#include <AP_HAL.h>
 
 extern const AP_HAL::HAL& hal;
 
-AP_RangeFinder_MaxsonarI2CXL::AP_RangeFinder_MaxsonarI2CXL(RangeFinder::RangeFinder_State &_state,
-                                                           AP_RangeFinder_Params &_params,
-                                                           AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev)
-    : AP_RangeFinder_Backend(_state, _params)
-    , _dev(std::move(dev))
+// Constructor //////////////////////////////////////////////////////////////
+
+AP_RangeFinder_MaxsonarI2CXL::AP_RangeFinder_MaxsonarI2CXL( FilterInt16 *filter ) :
+    RangeFinder(NULL, filter),
+    healthy(true),
+    _addr(AP_RANGE_FINDER_MAXSONARI2CXL_DEFAULT_ADDR)
 {
+    min_distance = AP_RANGE_FINDER_MAXSONARI2CXL_MIN_DISTANCE;
+    max_distance = AP_RANGE_FINDER_MAXSONARI2CXL_MAX_DISTANCE;
 }
 
-/*
-   detect if a Maxbotix rangefinder is connected. We'll detect by
-   trying to take a reading on I2C. If we get a result the sensor is
-   there.
-*/
-AP_RangeFinder_Backend *AP_RangeFinder_MaxsonarI2CXL::detect(RangeFinder::RangeFinder_State &_state,
-																AP_RangeFinder_Params &_params,
-                                                             AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev)
+// Public Methods //////////////////////////////////////////////////////////////
+
+// take_reading - ask sensor to make a range reading
+bool AP_RangeFinder_MaxsonarI2CXL::take_reading()
 {
-    if (!dev) {
-        return nullptr;
-    }
-
-    AP_RangeFinder_MaxsonarI2CXL *sensor
-        = new AP_RangeFinder_MaxsonarI2CXL(_state, _params, std::move(dev));
-    if (!sensor) {
-        return nullptr;
-    }
-
-    if (!sensor->_init()) {
-        delete sensor;
-        return nullptr;
-    }
-
-    return sensor;
-}
-
-/*
-  initialise sensor
- */
-bool AP_RangeFinder_MaxsonarI2CXL::_init(void)
-{
-    _dev->get_semaphore()->take_blocking();
-
-    if (!start_reading()) {
-        _dev->get_semaphore()->give();
+    // take range reading and read back results
+    uint8_t tosend[1] = 
+        { AP_RANGE_FINDER_MAXSONARI2CXL_COMMAND_TAKE_RANGE_READING };
+    if (hal.i2c->write(_addr, 1, tosend) != 0) {
+        healthy = false;
         return false;
+    }else{
+        healthy = true;
+        return true;
     }
-
-    // give time for the sensor to process the request
-    hal.scheduler->delay(100);
-
-    uint16_t reading_cm;
-    if (!get_reading(reading_cm)) {
-        _dev->get_semaphore()->give();
-        return false;
-    }
-
-    _dev->get_semaphore()->give();
-
-    _dev->register_periodic_callback(100000,
-                                     FUNCTOR_BIND_MEMBER(&AP_RangeFinder_MaxsonarI2CXL::_timer, void));
-
-    return true;
-}
-
-// start_reading() - ask sensor to make a range reading
-bool AP_RangeFinder_MaxsonarI2CXL::start_reading()
-{
-    uint8_t cmd = AP_RANGE_FINDER_MAXSONARI2CXL_COMMAND_TAKE_RANGE_READING;
-
-    // send command to take reading
-    return _dev->transfer(&cmd, sizeof(cmd), nullptr, 0);
 }
 
 // read - return last value measured by sensor
-bool AP_RangeFinder_MaxsonarI2CXL::get_reading(uint16_t &reading_cm)
+int AP_RangeFinder_MaxsonarI2CXL::read()
 {
-    be16_t val;
+    uint8_t buff[2];
+    int16_t ret_value = 0;
 
     // take range reading and read back results
-    bool ret = _dev->transfer(nullptr, 0, (uint8_t *) &val, sizeof(val));
-
-    if (ret) {
+    if (hal.i2c->read(_addr, 2, buff) != 0) {
+        healthy = false;
+    }else{
         // combine results into distance
-        reading_cm = be16toh(val);
-
-        // trigger a new reading
-        start_reading();
+        ret_value = buff[0] << 8 | buff[1];
+        healthy = true;
     }
-
-    return ret;
-}
-
-/*
-  timer called at 10Hz
-*/
-void AP_RangeFinder_MaxsonarI2CXL::_timer(void)
-{
-    uint16_t d;
-    if (get_reading(d)) {
-        WITH_SEMAPHORE(_sem);
-        distance = d;
-        new_distance = true;
-        state.last_reading_ms = AP_HAL::millis();
-    }
-}
-
-/*
-   update the state of the sensor
-*/
-void AP_RangeFinder_MaxsonarI2CXL::update(void)
-{
-    WITH_SEMAPHORE(_sem);
-    if (new_distance) {
-        state.distance_cm = distance;
-        new_distance = false;
-        update_status();
-    } else if (AP_HAL::millis() - state.last_reading_ms > 300) {
-        // if no updates for 0.3 seconds set no-data
-        set_status(RangeFinder::Status::NoData);
-    }
+    
+    // ensure distance is within min and max
+    ret_value = constrain_float(ret_value, min_distance, max_distance);
+    
+    ret_value = _mode_filter->apply(ret_value);
+    
+    return ret_value;
 }

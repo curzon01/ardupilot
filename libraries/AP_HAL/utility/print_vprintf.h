@@ -1,7 +1,11 @@
-#pragma once
 
+#ifndef __AP_HAL_UTILITY_VPRINTF_H__
+#define __AP_HAL_UTILITY_VPRINTF_H__
+
+#include <AP_HAL.h>
 #include <stdarg.h>
 
-#include <AP_HAL/AP_HAL.h>
+void print_vprintf (AP_HAL::Print *s, unsigned char in_progmem, const char *fmt, va_list ap);
 
-void print_vprintf(AP_HAL::BetterStream *s, const char *fmt, va_list ap);
+
+#endif //__AP_HAL_UTILITY_VPRINTF_H__

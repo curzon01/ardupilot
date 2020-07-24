@@ -1,3 +1,4 @@
+/// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 /*
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -17,52 +18,32 @@
  */
 
 
-#include <AP_HAL/AP_HAL.h>
-#include <AP_Common/AP_Common.h>
-#include "AP_ServoRelayEvents.h"
-#include <RC_Channel/RC_Channel.h>
-#include <SRV_Channel/SRV_Channel.h>
-#include <GCS_MAVLink/GCS.h>
+#include <AP_HAL.h>
+#include <AP_Common.h>
+#include <AP_ServoRelayEvents.h>
+#include <RC_Channel.h>
 
 extern const AP_HAL::HAL& hal;
 
-bool AP_ServoRelayEvents::do_set_servo(uint8_t _channel, uint16_t pwm)
+bool AP_ServoRelayEvents::do_set_servo(uint8_t channel, uint16_t pwm)
 {
-    SRV_Channel *c = SRV_Channels::srv_channel(_channel-1);
-    if (c == nullptr) {
-        return false;
-    }
-    switch(c->get_function())
-    {
-    case SRV_Channel::k_none:
-    case SRV_Channel::k_manual:
-    case SRV_Channel::k_sprayer_pump:
-    case SRV_Channel::k_sprayer_spinner:
-    case SRV_Channel::k_gripper:
-    case SRV_Channel::k_rcin1 ... SRV_Channel::k_rcin16: // rc pass-thru
-        break;
-    default:
-        gcs().send_text(MAV_SEVERITY_INFO, "ServoRelayEvent: Channel %d is already in use", _channel);
+    if (!(mask & 1U<<(channel-1))) {
+        // not allowed
         return false;
     }
     if (type == EVENT_TYPE_SERVO && 
-        channel == _channel) {
+        channel == channel) {
         // cancel previous repeat
         repeat = 0;
     }
-    c->set_output_pwm(pwm);
-    c->ignore_small_rcin_changes();
+    hal.rcout->enable_ch(channel-1);
+    hal.rcout->write(channel-1, pwm);
     return true;
 }
 
 bool AP_ServoRelayEvents::do_set_relay(uint8_t relay_num, uint8_t state)
 {
-    AP_Relay *relay = AP::relay();
-    if (relay == nullptr) {
-        return false;
-    }
-
-    if (!relay->enabled(relay_num)) {
+    if (!relay.enabled(relay_num)) {
         return false;
     }
     if (type == EVENT_TYPE_RELAY && 
@@ -71,11 +52,11 @@ bool AP_ServoRelayEvents::do_set_relay(uint8_t relay_num, uint8_t state)
         repeat = 0;
     }
     if (state == 1) {
-        relay->on(relay_num);
+        relay.on(relay_num);
     } else if (state == 0) {
-        relay->off(relay_num);
+        relay.off(relay_num);
     } else {
-        relay->toggle(relay_num);
+        relay.toggle(relay_num);
     }
     return true;
 }
@@ -83,21 +64,8 @@ bool AP_ServoRelayEvents::do_set_relay(uint8_t relay_num, uint8_t state)
 bool AP_ServoRelayEvents::do_repeat_servo(uint8_t _channel, uint16_t _servo_value, 
                                           int16_t _repeat, uint16_t _delay_ms)
 {
-    SRV_Channel *c = SRV_Channels::srv_channel(_channel-1);
-    if (c == nullptr) {
-        return false;
-    }
-    switch(c->get_function())
-    {
-    case SRV_Channel::k_none:
-    case SRV_Channel::k_manual:
-    case SRV_Channel::k_sprayer_pump:
-    case SRV_Channel::k_sprayer_spinner:
-    case SRV_Channel::k_gripper:
-    case SRV_Channel::k_rcin1 ... SRV_Channel::k_rcin16: // rc pass-thru
-        break;
-    default:
-        gcs().send_text(MAV_SEVERITY_INFO, "ServoRelayEvent: Channel %d is already in use", _channel);
+    if (!(mask & 1U<<(_channel-1))) {
+        // not allowed
         return false;
     }
     channel = _channel;
@@ -113,11 +81,7 @@ bool AP_ServoRelayEvents::do_repeat_servo(uint8_t _channel, uint16_t _servo_valu
 
 bool AP_ServoRelayEvents::do_repeat_relay(uint8_t relay_num, int16_t _repeat, uint32_t _delay_ms)
 {
-    AP_Relay *relay = AP::relay();
-    if (relay == nullptr) {
-        return false;
-    }
-    if (!relay->enabled(relay_num)) {
+    if (!relay.enabled(relay_num)) {
         return false;
     }
     type = EVENT_TYPE_RELAY;
@@ -135,50 +99,31 @@ bool AP_ServoRelayEvents::do_repeat_relay(uint8_t relay_num, int16_t _repeat, ui
 */
 void AP_ServoRelayEvents::update_events(void)
 {
-    if (repeat == 0 || (AP_HAL::millis() - start_time_ms) < delay_ms) {
+    if (repeat == 0 || (hal.scheduler->millis() - start_time_ms) < delay_ms) {
         return;
     }
 
-    start_time_ms = AP_HAL::millis();
+    start_time_ms = hal.scheduler->millis();
 
     switch (type) {
-    case EVENT_TYPE_SERVO: {
-        SRV_Channel *c = SRV_Channels::srv_channel(channel-1);
-        if (c != nullptr) {
-            if (repeat & 1) {
-                c->set_output_pwm(c->get_trim());
-            } else {
-                c->set_output_pwm(servo_value);
-                c->ignore_small_rcin_changes();
-            }
+    case EVENT_TYPE_SERVO:
+        hal.rcout->enable_ch(channel-1);
+        if (repeat & 1) {
+            hal.rcout->write(channel-1, RC_Channel::rc_channel(channel-1)->radio_trim);
+        } else {
+            hal.rcout->write(channel-1, servo_value);
         }
         break;
-    }
-
-    case EVENT_TYPE_RELAY: {
-        AP_Relay *relay = AP::relay();
-        if (relay != nullptr) {
-            relay->toggle(channel);
-        }
+        
+    case EVENT_TYPE_RELAY:
+        relay.toggle(channel);
         break;
     }
-    }
+    
     if (repeat > 0) {
         repeat--;
     } else {
         // toggle bottom bit so servos flip in value
         repeat ^= 1;
     }
-}
-
-// singleton instance
-AP_ServoRelayEvents *AP_ServoRelayEvents::_singleton;
-
-namespace AP {
-
-AP_ServoRelayEvents *servorelayevents()
-{
-    return AP_ServoRelayEvents::get_singleton();
-}
-
 }

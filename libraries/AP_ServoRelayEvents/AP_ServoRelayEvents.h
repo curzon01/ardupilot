@@ -1,30 +1,27 @@
+// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
+
 /*
  * AP_ServoRelayEvent.h
  *
  * handle DO_SET_SERVO, DO_REPEAT_SERVO, DO_SET_RELAY and
  * DO_REPEAT_RELAY commands
  */
-#pragma once
 
-#include <AP_Param/AP_Param.h>
-#include <AP_Relay/AP_Relay.h>
+#ifndef __AP_SERVORELAYEVENTS_H__
+#define __AP_SERVORELAYEVENTS_H__
+
+#include <AP_Param.h>
+#include <AP_Relay.h>
 
 class AP_ServoRelayEvents {
 public:
-    AP_ServoRelayEvents()
-        : type(EVENT_TYPE_RELAY)
-    {
-        _singleton = this;
-    }
+    AP_ServoRelayEvents(AP_Relay &_relay) : 
+    relay(_relay),
+    mask(0)
+        {}
 
-    /* Do not allow copies */
-    AP_ServoRelayEvents(const AP_ServoRelayEvents &other) = delete;
-    AP_ServoRelayEvents &operator=(const AP_ServoRelayEvents&) = delete;
-
-    // get singleton instance
-    static AP_ServoRelayEvents *get_singleton() {
-        return _singleton;
-    }
+    // set allowed servo channel mask
+    void set_channel_mask(uint16_t _mask) { mask = _mask; }
 
     bool do_set_servo(uint8_t channel, uint16_t pwm);
     bool do_set_relay(uint8_t relay_num, uint8_t state);
@@ -33,8 +30,8 @@ public:
     void update_events(void);
 
 private:
-
-    static AP_ServoRelayEvents *_singleton;
+    AP_Relay &relay;
+    uint16_t mask;
 
     // event control state
     enum event_type { 
@@ -60,6 +57,4 @@ private:
 	uint16_t servo_value;
 };
 
-namespace AP {
-    AP_ServoRelayEvents *servorelayevents();
-};
+#endif /* AP_SERVORELAYEVENTS_H_ */

@@ -1,3 +1,4 @@
+// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 /*
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -12,209 +13,111 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
+/*
+ *       AP_RangeFinder_PulsedLightLRF.cpp - Arduino Library for Pulsed Light's Laser Range Finder
+ *       Code by Randy Mackay. DIYDrones.com
+ *
+ *       Sensor should be connected to the I2C port
+ *
+ *       Variables:
+ *               bool healthy : indicates whether last communication with sensor was successful
+ *
+ *       Methods:
+ *               take_reading(): ask the sonar to take a new distance measurement
+ *               read() : read last distance measured (in cm)
+ *
+ */
+
 #include "AP_RangeFinder_PulsedLightLRF.h"
-
-#include <utility>
-#include <stdio.h>
-
-#include <AP_HAL/AP_HAL.h>
-#include <AP_HAL/utility/sparse-endian.h>
+#include <AP_HAL.h>
 
 extern const AP_HAL::HAL& hal;
 
-/* LL40LS Registers addresses */
-#define LL40LS_MEASURE_REG        0x00        /* Measure range register */
-#define LL40LS_SIG_COUNT_VAL      0x02
-#define LL40LS_DISTHIGH_REG       0x0F        /* High byte of distance register, auto increment */
-#define LL40LS_COUNT              0x11
-#define LL40LS_HW_VERSION         0x41
-#define LL40LS_INTERVAL           0x45
-#define LL40LS_SW_VERSION         0x4f
+// Constructor //////////////////////////////////////////////////////////////
 
-// bit values
-#define LL40LS_MSRREG_RESET       0x00        /* reset to power on defaults */
-#define LL40LS_AUTO_INCREMENT     0x80
-#define LL40LS_COUNT_CONTINUOUS   0xff
-#define LL40LS_MSRREG_ACQUIRE     0x04        /* Value to initiate a measurement, varies based on sensor revision */
-
-// i2c address
-#define LL40LS_ADDR   0x62
-
-AP_RangeFinder_PulsedLightLRF::AP_RangeFinder_PulsedLightLRF(uint8_t bus,
-                                                             RangeFinder::RangeFinder_State &_state,
-                                                             AP_RangeFinder_Params &_params,
-                                                                 RangeFinder::Type _rftype)
-    : AP_RangeFinder_Backend(_state, _params)
-    , _dev(hal.i2c_mgr->get_device(bus, LL40LS_ADDR))
-    , rftype(_rftype)
+AP_RangeFinder_PulsedLightLRF::AP_RangeFinder_PulsedLightLRF(FilterInt16 *filter) :
+    RangeFinder(NULL, filter),
+    healthy(true),
+    _addr(AP_RANGEFINDER_PULSEDLIGHTLRF_ADDR)
 {
+    min_distance = AP_RANGEFINDER_PULSEDLIGHTLRF_MIN_DISTANCE;
+    max_distance = AP_RANGEFINDER_PULSEDLIGHTLRF_MAX_DISTANCE;
 }
 
-/*
-   detect if a PulsedLight rangefinder is connected. We'll detect by
-   look for the version registers
-*/
-AP_RangeFinder_Backend *AP_RangeFinder_PulsedLightLRF::detect(uint8_t bus,
-                                                              RangeFinder::RangeFinder_State &_state,
-															  AP_RangeFinder_Params &_params,
-                                                                  RangeFinder::Type rftype)
+// Public Methods //////////////////////////////////////////////////////////////
+
+// init - simply sets the i2c address
+void AP_RangeFinder_PulsedLightLRF::init(uint8_t address)
 {
-    AP_RangeFinder_PulsedLightLRF *sensor
-        = new AP_RangeFinder_PulsedLightLRF(bus, _state, _params, rftype);
-    if (!sensor ||
-        !sensor->init()) {
-        delete sensor;
-        return nullptr;
-    }
-    return sensor;
+    // set sensor i2c address
+    _addr = address;
 }
 
-/*
-  called at 50Hz
- */
-void AP_RangeFinder_PulsedLightLRF::timer(void)
+// take_reading - ask sensor to make a range reading
+bool AP_RangeFinder_PulsedLightLRF::take_reading()
 {
-    if (check_reg_counter++ == 10) {
-        check_reg_counter = 0;
-        if (!_dev->check_next_register()) {
-            // re-send the acquire. this handles the case of power
-            // cycling while running in continuous mode
-            _dev->write_register(LL40LS_MEASURE_REG, LL40LS_MSRREG_ACQUIRE);            
-        }
+    // get pointer to i2c bus semaphore
+    AP_HAL::Semaphore* i2c_sem = hal.i2c->get_semaphore();
+
+    // exit immediately if we can't take the semaphore
+    if (i2c_sem == NULL || !i2c_sem->take(5)) {
+        healthy = false;
+        return healthy;
     }
 
-    switch (phase) {
-    case PHASE_COLLECT: {
-        be16_t val;
-        // read the high and low byte distance registers
-        if (_dev->read_registers(LL40LS_DISTHIGH_REG | LL40LS_AUTO_INCREMENT, (uint8_t*)&val, sizeof(val))) {
-            uint16_t _distance_cm = be16toh(val);
-            // remove momentary spikes
-            if (abs(_distance_cm - last_distance_cm) < 100) {
-                state.distance_cm = _distance_cm;
-                state.last_reading_ms = AP_HAL::millis();
-                update_status();                
-            }
-            last_distance_cm = _distance_cm;
-        } else {
-            set_status(RangeFinder::Status::NoData);
-        }
-        if (!v2_hardware) {
-            // for v2 hw we use continuous mode
-            phase = PHASE_MEASURE;
-        }
-        if (!v3hp_hardware) {
-            // for v3hp hw we start PHASE_MEASURE immediately after PHASE_COLLECT 
-            break;
-        }
+    // send command to take reading
+    if (hal.i2c->writeRegister(_addr, AP_RANGEFINDER_PULSEDLIGHTLRF_COMMAND_REG, AP_RANGEFINDER_PULSEDLIGHTLRF_CMDREG_ACQUISITION) != 0) {
+        healthy = false;
+    }else{
+        healthy = true;
     }
-    FALLTHROUGH;
-    case PHASE_MEASURE:
-        if (_dev->write_register(LL40LS_MEASURE_REG, LL40LS_MSRREG_ACQUIRE)) {
-            phase = PHASE_COLLECT;
-        }
-        break;
-    }
+
+    // return semaphore
+    i2c_sem->give();
+
+    return healthy;
 }
 
-
-/*
-  a table of settings for a lidar
- */
-struct settings_table {
-    uint8_t reg;
-    uint8_t value;
-};
-
-/*
-  register setup table for V1 Lidar
- */
-static const struct settings_table settings_v1[] = {
-    { LL40LS_MEASURE_REG, LL40LS_MSRREG_RESET },
-};
-
-/*
-  register setup table for V2 Lidar
- */
-static const struct settings_table settings_v2[] = {
-    { LL40LS_INTERVAL, 0x28 }, // 0x28 == 50Hz
-    { LL40LS_COUNT, LL40LS_COUNT_CONTINUOUS },
-    { LL40LS_MEASURE_REG, LL40LS_MSRREG_ACQUIRE },
-};
-
-/*
-  register setup table for V3HP Lidar
- */
-static const struct settings_table settings_v3hp[] = {
-    { LL40LS_SIG_COUNT_VAL, 0x80 }, // 0x80 = 128 acquisitions
-};
-
-/*
-  initialise the sensor to required settings
- */
-bool AP_RangeFinder_PulsedLightLRF::init(void)
+// read - return last value measured by sensor
+int AP_RangeFinder_PulsedLightLRF::read()
 {
-    if (!_dev) {
-        return false;
-    }
-    _dev->get_semaphore()->take_blocking();
-    _dev->set_retries(3);
+    uint8_t buff[2];
+    int16_t ret_value = 0;
 
-    // LidarLite needs split transfers
-    _dev->set_split_transfers(true);
+    // get pointer to i2c bus semaphore
+    AP_HAL::Semaphore* i2c_sem = hal.i2c->get_semaphore();
 
-    if (rftype == RangeFinder::Type::PLI2CV3) {
-        v2_hardware = true;
-    } else if (rftype == RangeFinder::Type::PLI2CV3HP) {
-        v3hp_hardware = true;
-    } else {
-        // auto-detect v1 vs v2
-        if (!(_dev->read_registers(LL40LS_HW_VERSION, &hw_version, 1) &&
-              hw_version > 0 &&
-              _dev->read_registers(LL40LS_SW_VERSION, &sw_version, 1) &&
-              sw_version > 0)) {
-            printf("PulsedLightI2C: bad version 0x%02x 0x%02x\n", (unsigned)hw_version, (unsigned)sw_version);
-            // invalid version information
-            goto failed;
-        }
-        v2_hardware = (hw_version >= 0x15);
-    }
-    
-    const struct settings_table *table;
-    uint8_t num_settings;
-
-    if (v2_hardware) {
-        table = settings_v2;
-        num_settings = sizeof(settings_v2) / sizeof(settings_table);
-        phase = PHASE_COLLECT;
-    } else if (v3hp_hardware) {
-        table = settings_v3hp;
-        num_settings = sizeof(settings_v3hp) / sizeof(settings_table);
-        phase = PHASE_MEASURE;
-    } else {
-        table = settings_v1;
-        num_settings = sizeof(settings_v1) / sizeof(settings_table);
-        phase = PHASE_MEASURE;    
+    // exit immediately if we can't take the semaphore
+    if (i2c_sem == NULL || !i2c_sem->take(5)) {
+        healthy = false;
+        return healthy;
     }
 
-    _dev->setup_checked_registers(num_settings);
+    // assume the worst
+    healthy = false;
 
-    for (uint8_t i = 0; i < num_settings; i++) {
-        if (!_dev->write_register(table[i].reg, table[i].value, true)) {
-            goto failed;
+    // read the high byte
+    if (hal.i2c->readRegisters(_addr, AP_RANGEFINDER_PULSEDLIGHTLRF_DISTHIGH_REG, 1, &buff[0]) == 0) {
+        // read the low byte
+        if (hal.i2c->readRegisters(_addr, AP_RANGEFINDER_PULSEDLIGHTLRF_DISTLOW_REG, 1, &buff[1]) == 0) {
+            healthy = true;
+            // combine results into distance
+            ret_value = buff[0] << 8 | buff[1];
         }
     }
 
-    printf("Found LidarLite device=0x%x v2=%d v3hp=%d\n", _dev->get_bus_id(), (int)v2_hardware, (int)v3hp_hardware);
-    
-    _dev->get_semaphore()->give();
+    // ensure distance is within min and max
+    ret_value = constrain_int16(ret_value, min_distance, max_distance);
+    ret_value = _mode_filter->apply(ret_value);
 
-    _dev->register_periodic_callback(20000,
-                                     FUNCTOR_BIND_MEMBER(&AP_RangeFinder_PulsedLightLRF::timer, void));
-    return true;
+    // return semaphore
+    i2c_sem->give();
 
-failed:
-    _dev->get_semaphore()->give();
-    return false;
+    // kick off another reading for next time
+    // To-Do: replace this with continuous mode
+    take_reading();
+
+    // to-do: do we really want to return 0 if reading the distance fails?
+    return ret_value;
 }
-

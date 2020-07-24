@@ -1,7 +1,9 @@
-#pragma once
+
+#ifndef __AP_HAL_NAMESPACE_H__
+#define __AP_HAL_NAMESPACE_H__
 
 #include "string.h"
-#include "utility/functor.h"
+#include "utility/FastDelegate.h"
 
 namespace AP_HAL {
 
@@ -10,11 +12,8 @@ namespace AP_HAL {
 
     /* Toplevel class names for drivers: */
     class UARTDriver;
-    class I2CDevice;
-    class I2CDeviceManager;
-    class Device;
+    class I2CDriver;
 
-    class SPIDevice;
     class SPIDeviceDriver;
     class SPIDeviceManager;
 
@@ -27,38 +26,38 @@ namespace AP_HAL {
     class RCOutput;
     class Scheduler;
     class Semaphore;
-    class OpticalFlow;
-    class DSP;
-
-    class CANProtocol;
-    class CANManager;
-    class CANHal;
-
+    
     class Util;
-    class Flash;
 
     /* Utility Classes */
     class Print;
     class Stream;
     class BetterStream;
 
-    /* Typdefs for function pointers (Procedure, Member Procedure)
+    /* Typdefs for function pointers (Procedure, Member Procedure) 
 
        For member functions we use the FastDelegate delegates class
        which allows us to encapculate a member function as a type
      */
     typedef void(*Proc)(void);
-    FUNCTOR_TYPEDEF(MemberProc, void);
+    typedef fastdelegate::FastDelegate0<> MemberProc;
 
     /**
      * Global names for all of the existing SPI devices on all platforms.
      */
 
-    enum SPIDeviceType {
-        // Devices using AP_HAL::SPIDevice abstraction
-        SPIDevice_Type              = -1,
+    enum SPIDevice {
+        SPIDevice_Dataflash,
+        SPIDevice_ADS7844,
+        SPIDevice_MS5611,
+        SPIDevice_MPU6000,
+        SPIDevice_ADNS3080_SPI0,
+        SPIDevice_ADNS3080_SPI3
     };
 
-    // Must be implemented by the concrete HALs.
-    const HAL& get_HAL();
 }
+
+// macro to hide the details of AP_HAL::MemberProc
+#define AP_HAL_MEMBERPROC(func) fastdelegate::MakeDelegate(this, func)
+
+#endif // __AP_HAL_NAMESPACE_H__

@@ -1,5 +1,5 @@
-#pragma once
-
+#ifndef __AP_AHRS_DCM_H__
+#define __AP_AHRS_DCM_H__
 /*
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -21,91 +21,62 @@
  *
  */
 
-class AP_AHRS_DCM : public AP_AHRS {
+class AP_AHRS_DCM : public AP_AHRS
+{
 public:
-    AP_AHRS_DCM()
-        : AP_AHRS()
-        , _error_rp(1.0f)
-        , _error_yaw(1.0f)
-        , _mag_earth(1, 0)
-        , _imu1_weight(0.5f)
+    // Constructors
+    AP_AHRS_DCM(AP_InertialSensor &ins, GPS *&gps) :
+        AP_AHRS(ins, gps),
+        _last_declination(0),
+        _mag_earth(1,0)
     {
         _dcm_matrix.identity();
 
         // these are experimentally derived from the simulator
         // with large drift levels
-        _ki = 0.0087f;
-        _ki_yaw = 0.01f;
+        _ki = 0.0087;
+        _ki_yaw = 0.01;
     }
 
-    /* Do not allow copies */
-    AP_AHRS_DCM(const AP_AHRS_DCM &other) = delete;
-    AP_AHRS_DCM &operator=(const AP_AHRS_DCM&) = delete;
-
-
     // return the smoothed gyro vector corrected for drift
-    const Vector3f &get_gyro() const override {
-        return _omega;
+    const Vector3f get_gyro(void) const {
+        return _omega + _omega_P + _omega_yaw_P;
     }
 
     // return rotation matrix representing rotaton from body to earth axes
-    const Matrix3f &get_rotation_body_to_ned() const override {
+    const Matrix3f &get_dcm_matrix(void) const {
         return _body_dcm_matrix;
     }
 
-    // get rotation matrix specifically from DCM backend (used for compass calibrator)
-    const Matrix3f &get_DCM_rotation_body_to_ned(void) const override { return _body_dcm_matrix; }
-
     // return the current drift correction integrator value
-    const Vector3f &get_gyro_drift() const override {
+    const Vector3f &get_gyro_drift(void) const {
         return _omega_I;
     }
 
-    // reset the current gyro drift estimate
-    //  should be called if gyro offsets are recalculated
-    void reset_gyro_drift() override;
-
     // Methods
-    void            update(bool skip_ins_update=false) override;
-    void            reset(bool recover_eulers = false) override;
+    void            update(void);
+    void            reset(bool recover_eulers = false);
 
     // reset the current attitude, used on new IMU calibration
-    void reset_attitude(const float &roll, const float &pitch, const float &yaw) override;
+    void reset_attitude(const float &roll, const float &pitch, const float &yaw);
 
     // dead-reckoning support
-    virtual bool get_position(struct Location &loc) const override;
+    bool get_position(struct Location &loc);
 
     // status reporting
-    float           get_error_rp() const override {
-        return _error_rp;
-    }
-    float           get_error_yaw() const override {
-        return _error_yaw;
-    }
+    float           get_error_rp(void);
+    float           get_error_yaw(void);
 
     // return a wind estimation vector, in m/s
-    Vector3f wind_estimate() const override {
+    Vector3f wind_estimate(void) {
         return _wind;
     }
 
-    void get_relative_position_D_home(float &posD) const override;
-
     // return an airspeed estimate if available. return true
     // if we have an estimate
-    bool airspeed_estimate(float &airspeed_ret) const override;
+    bool airspeed_estimate(float *airspeed_ret);
 
-    bool            use_compass() override;
-
-    // return the quaternion defining the rotation from NED to XYZ (body) axes
-    bool get_quaternion(Quaternion &quat) const override WARN_IF_UNUSED;
-
-    bool set_home(const Location &loc) override WARN_IF_UNUSED;
-    void estimate_wind(void);
-
-    // is the AHRS subsystem healthy?
-    bool healthy() const override;
-
-    bool get_velocity_NED(Vector3f &vec) const override;
+    bool            use_compass(void);
 
 private:
     float _ki;
@@ -120,10 +91,8 @@ private:
     void            drift_correction_yaw(void);
     float           yaw_error_compass();
     void            euler_angles(void);
+    void            estimate_wind(Vector3f &velocity);
     bool            have_gps(void) const;
-    bool            use_fast_gains(void) const;
-    void            load_watchdog_home();
-    void            backup_attitude(void);
 
     // primary representation of attitude of board used for all inertial calculations
     Matrix3f _dcm_matrix;
@@ -139,26 +108,29 @@ private:
     Vector3f _omega;                            // Corrected Gyro_Vector data
 
     // variables to cope with delaying the GA sum to match GPS lag
-    Vector3f ra_delayed(uint8_t instance, const Vector3f &ra);
-    Vector3f _ra_delay_buffer[INS_MAX_INSTANCES];
+    Vector3f ra_delayed(const Vector3f &ra);
+    uint8_t   _ra_delay_length;
+    uint8_t   _ra_delay_next;
+    Vector3f *_ra_delay_buffer;
 
     // P term gain based on spin rate
     float           _P_gain(float spin_rate);
 
-    // P term yaw gain based on rate of change of horiz velocity
-    float           _yaw_gain(void) const;
-
     // state to support status reporting
     float _renorm_val_sum;
     uint16_t _renorm_val_count;
-    float _error_rp;
-    float _error_yaw;
+    float _error_rp_sum;
+    uint16_t _error_rp_count;
+    float _error_rp_last;
+    float _error_yaw_sum;
+    uint16_t _error_yaw_count;
+    float _error_yaw_last;
 
     // time in millis when we last got a GPS heading
     uint32_t _gps_last_update;
 
     // state of accel drift correction
-    Vector3f _ra_sum[INS_MAX_INSTANCES];
+    Vector3f _ra_sum;
     Vector3f _last_velocity;
     float _ra_deltat;
     uint32_t _ra_sum_start;
@@ -190,12 +162,6 @@ private:
 
     // estimated wind in m/s
     Vector3f _wind;
-
-    float _imu1_weight;
-
-    // last time AHRS failed in milliseconds
-    uint32_t _last_failure_ms;
-
-    // time when DCM was last reset
-    uint32_t _last_startup_ms;
 };
+
+#endif // __AP_AHRS_DCM_H__

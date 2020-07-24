@@ -1,10 +1,13 @@
+// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
+
 // HIL_MODE SELECTION
 //
 // Mavlink supports
-// 1. HIL_MODE_SENSORS: full sensor simulation
-#define HIL_MODE            HIL_MODE_SENSORS
+// 1. HIL_MODE_ATTITUDE : simulated position, airspeed, and attitude
+// 2. HIL_MODE_SENSORS: full sensor simulation
+#define HIL_MODE            HIL_MODE_ATTITUDE
 
-// HIL_PORT SELECTION
+// HIL_PORT SELCTION
 //
 // PORT 1
 // If you would like to run telemetry communications for a groundstation
@@ -26,3 +29,14 @@
 
 #define HIL_PORT            3
 
+// You can set your gps protocol here for your actual
+// hardware and leave it without affecting the hardware
+// in the loop simulation
+#define GPS_PROTOCOL            GPS_PROTOCOL_MTK
+
+// Sensors
+// All sensors are supported in all modes.
+// The magnetometer is not used in
+// HIL_MODE_ATTITUDE but you may leave it
+// enabled if you wish.
+#define MAGNETOMETER        ENABLED

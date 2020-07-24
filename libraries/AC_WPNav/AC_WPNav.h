@@ -1,342 +1,257 @@
-#pragma once
+/// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
+#ifndef AC_WPNAV_H
+#define AC_WPNAV_H
 
-#include <AP_Common/AP_Common.h>
-#include <AP_Param/AP_Param.h>
-#include <AP_Math/AP_Math.h>
-#include <AP_Common/Location.h>
-#include <AP_InertialNav/AP_InertialNav.h>     // Inertial Navigation library
-#include <AC_AttitudeControl/AC_PosControl.h>      // Position control library
-#include <AC_AttitudeControl/AC_AttitudeControl.h> // Attitude control library
-#include <AP_Terrain/AP_Terrain.h>
-#include <AC_Avoidance/AC_Avoid.h>                 // Stop at fence library
+#include <inttypes.h>
+#include <AP_Common.h>
+#include <AP_Param.h>
+#include <AP_Math.h>
+#include <AC_PID.h>             // PID library
+#include <APM_PI.h>             // PID library
+#include <AP_InertialNav.h>     // Inertial Navigation library
 
-// maximum velocities and accelerations
+// loiter maximum velocities and accelerations
 #define WPNAV_ACCELERATION              100.0f      // defines the default velocity vs distant curve.  maximum acceleration in cm/s/s that position controller asks for from acceleration controller
 #define WPNAV_ACCELERATION_MIN           50.0f      // minimum acceleration in cm/s/s - used for sanity checking _wp_accel parameter
+#define WPNAV_ACCEL_MAX                 980.0f      // max acceleration in cm/s/s that the loiter velocity controller will ask from the lower accel controller.
+                                                    // should be 1.5 times larger than WPNAV_ACCELERATION.
+                                                    // max acceleration = max lean angle * 980 * pi / 180.  i.e. 23deg * 980 * 3.141 / 180 = 393 cm/s/s
 
-#define WPNAV_WP_SPEED                  500.0f      // default horizontal speed between waypoints in cm/s
-#define WPNAV_WP_SPEED_MIN               20.0f      // minimum horizontal speed between waypoints in cm/s
-#define WPNAV_WP_TRACK_SPEED_MIN         50.0f      // minimum speed along track of the target point the vehicle is chasing in cm/s (used as target slows down before reaching destination)
+#define WPNAV_LOITER_SPEED              500.0f      // maximum default loiter speed in cm/s
+#define WPNAV_LOITER_ACCEL_MAX          250.0f      // maximum acceleration in loiter mode
+#define WPNAV_LOITER_ACCEL_MIN           25.0f      // minimum acceleration in loiter mode
+#define WPNAV_LOITER_SPEED_MAX_TO_CORRECT_ERROR 200.0f      // maximum speed used to correct position error (i.e. not including feed forward)
+
+#define MAX_LEAN_ANGLE                  4500        // default maximum lean angle
+
+#define WPNAV_WP_SPEED                  500.0f      // default horizontal speed betwen waypoints in cm/s
 #define WPNAV_WP_RADIUS                 200.0f      // default waypoint radius in cm
-#define WPNAV_WP_RADIUS_MIN               5.0f      // minimum waypoint radius in cm
 
 #define WPNAV_WP_SPEED_UP               250.0f      // default maximum climb velocity
 #define WPNAV_WP_SPEED_DOWN             150.0f      // default maximum descent velocity
 
-#define WPNAV_WP_ACCEL_Z_DEFAULT        100.0f      // default vertical acceleration between waypoints in cm/s/s
+#define WPNAV_ALT_HOLD_P                1.0f        // default throttle controller's altitude hold's P gain.
+#define WPNAV_ALT_HOLD_ACCEL_MAX        250.0f      // hard coded copy of throttle controller's maximum acceleration in cm/s.  To-Do: remove duplication with throttle controller definition
 
-#define WPNAV_LEASH_LENGTH_MIN          100.0f      // minimum leash lengths in cm
-
-#define WPNAV_WP_FAST_OVERSHOOT_MAX     200.0f      // 2m overshoot is allowed during fast waypoints to allow for smooth transitions to next waypoint
-
-#define WPNAV_YAW_DIST_MIN                 200      // minimum track length which will lead to target yaw being updated to point at next waypoint.  Under this distance the yaw target will be frozen at the current heading
-#define WPNAV_YAW_LEASH_PCT_MIN         0.134f      // target point must be at least this distance from the vehicle (expressed as a percentage of the maximum distance it can be from the vehicle - i.e. the leash length)
-
-#define WPNAV_RANGEFINDER_FILT_Z         0.25f      // range finder distance filtered at 0.25hz
+#define WPNAV_MIN_LEASH_LENGTH          100.0f      // minimum leash lengths in cm
 
 class AC_WPNav
 {
 public:
 
-    // spline segment end types enum
-    enum spline_segment_end_type {
-        SEGMENT_END_STOP = 0,
-        SEGMENT_END_STRAIGHT,
-        SEGMENT_END_SPLINE
-    };
-
     /// Constructor
-    AC_WPNav(const AP_InertialNav& inav, const AP_AHRS_View& ahrs, AC_PosControl& pos_control, const AC_AttitudeControl& attitude_control);
+    AC_WPNav(const AP_InertialNav* inav, const AP_AHRS* ahrs, APM_PI* pid_pos_lat, APM_PI* pid_pos_lon, AC_PID* pid_rate_lat, AC_PID* pid_rate_lon);
 
-    /// provide pointer to terrain database
-    void set_terrain(AP_Terrain* terrain_ptr) { _terrain = terrain_ptr; }
+    ///
+    /// simple loiter controller
+    ///
 
-    /// provide rangefinder altitude
-    void set_rangefinder_alt(bool use, bool healthy, float alt_cm) { _rangefinder_available = use; _rangefinder_healthy = healthy; _rangefinder_alt_cm = alt_cm; }
+    /// get_loiter_target - get loiter target as position vector (from home in cm)
+    const Vector3f &get_loiter_target() const { return _target; }
 
-    // return true if range finder may be used for terrain following
-    bool rangefinder_used() const { return _rangefinder_use; }
-    bool rangefinder_used_and_healthy() const { return _rangefinder_use && _rangefinder_healthy; }
+    /// set_loiter_target in cm from home
+    void set_loiter_target(const Vector3f& position);
 
-    // get expected source of terrain data if alt-above-terrain command is executed (used by Copter's ModeRTL)
-    enum class TerrainSource {
-        TERRAIN_UNAVAILABLE,
-        TERRAIN_FROM_RANGEFINDER,
-        TERRAIN_FROM_TERRAINDATABASE,
-    };
-    AC_WPNav::TerrainSource get_terrain_source() const;
+    /// init_loiter_target - set initial loiter target based on current position and velocity
+    void init_loiter_target(const Vector3f& position, const Vector3f& velocity);
+
+    /// move_loiter_target - move destination using pilot input
+    void move_loiter_target(float control_roll, float control_pitch, float dt);
+
+    /// get_distance_to_target - get horizontal distance to loiter target in cm
+    float get_distance_to_target() const;
+
+    /// get_bearing_to_target - get bearing to loiter target in centi-degrees
+    int32_t get_bearing_to_target() const;
+
+    /// update_loiter - run the loiter controller - should be called at 10hz
+    void update_loiter();
+
+    /// get_stopping_point - returns vector to stopping point based on a horizontal position and velocity
+    void get_stopping_point(const Vector3f& position, const Vector3f& velocity, Vector3f &target) const;
+
+    /// set_loiter_velocity - allows main code to pass the maximum velocity for loiter
+    void set_loiter_velocity(float velocity_cms) { _loiter_speed_cms = velocity_cms; };
 
     ///
     /// waypoint controller
     ///
 
-    /// wp_and_spline_init - initialise straight line and spline waypoint controllers
-    ///     updates target roll, pitch targets and I terms based on vehicle lean angles
-    ///     should be called once before the waypoint controller is used but does not need to be called before subsequent updates to destination
-    void wp_and_spline_init();
+    /// get_destination waypoint using position vector (distance from home in cm)
+    const Vector3f &get_destination() const { return _destination; }
 
-    /// set current target horizontal speed during wp navigation
-    void set_speed_xy(float speed_cms);
+    /// set_destination waypoint using position vector (distance from home in cm)
+    void set_destination(const Vector3f& destination);
 
-    /// set current target climb or descent rate during wp navigation
-    void set_speed_up(float speed_up_cms);
-    void set_speed_down(float speed_down_cms);
+    /// set_origin_and_destination - set origin and destination waypoints using position vectors (distance from home in cm)
+    void set_origin_and_destination(const Vector3f& origin, const Vector3f& destination);
 
-    /// get default target horizontal velocity during wp navigation
-    float get_default_speed_xy() const { return _wp_speed_cms; }
+    /// advance_target_along_track - move target location along track from origin to destination
+    void advance_target_along_track(float dt);
 
-    /// get default target climb speed in cm/s during missions
-    float get_default_speed_up() const { return _wp_speed_up_cms; }
-
-    /// get default target descent rate in cm/s during missions.  Note: always positive
-    float get_default_speed_down() const { return _wp_speed_down_cms; }
-
-    /// get_speed_z - returns target descent speed in cm/s during missions.  Note: always positive
-    float get_accel_z() const { return _wp_accel_z_cmss; }
-
-    /// get_wp_acceleration - returns acceleration in cm/s/s during missions
-    float get_wp_acceleration() const { return _wp_accel_cmss.get(); }
-
-    /// get_wp_destination waypoint using position vector (distance from ekf origin in cm)
-    const Vector3f &get_wp_destination() const { return _destination; }
-
-    /// get origin using position vector (distance from ekf origin in cm)
-    const Vector3f &get_wp_origin() const { return _origin; }
-
-    /// true if origin.z and destination.z are alt-above-terrain, false if alt-above-ekf-origin
-    bool origin_and_destination_are_terrain_alt() const { return _terrain_alt; }
-
-    /// set_wp_destination waypoint using location class
-    ///     returns false if conversion from location to vector from ekf origin cannot be calculated
-    bool set_wp_destination(const Location& destination);
-
-    // returns wp location using location class.
-    // returns false if unable to convert from target vector to global
-    // coordinates
-    bool get_wp_destination(Location& destination) const;
-
-    // returns object avoidance adjusted destination which is always the same as get_wp_destination
-    // having this function unifies the AC_WPNav_OA and AC_WPNav interfaces making vehicle code simpler
-    virtual bool get_oa_wp_destination(Location& destination) const { return get_wp_destination(destination); }
-
-    /// set_wp_destination waypoint using position vector (distance from ekf origin in cm)
-    ///     terrain_alt should be true if destination.z is a desired altitude above terrain
-    bool set_wp_destination(const Vector3f& destination, bool terrain_alt = false);
-
-    /// set waypoint destination using NED position vector from ekf origin in meters
-    bool set_wp_destination_NED(const Vector3f& destination_NED);
-
-    /// set_wp_origin_and_destination - set origin and destination waypoints using position vectors (distance from ekf origin in cm)
-    ///     terrain_alt should be true if origin.z and destination.z are desired altitudes above terrain (false if these are alt-above-ekf-origin)
-    ///     returns false on failure (likely caused by missing terrain data)
-    virtual bool set_wp_origin_and_destination(const Vector3f& origin, const Vector3f& destination, bool terrain_alt = false);
-
-    /// shift_wp_origin_to_current_pos - shifts the origin and destination so the origin starts at the current position
-    ///     used to reset the position just before takeoff
-    ///     relies on set_wp_destination or set_wp_origin_and_destination having been called first
-    void shift_wp_origin_to_current_pos();
-
-    /// shifts the origin and destination horizontally to the current position
-    ///     used to reset the track when taking off without horizontal position control
-    ///     relies on set_wp_destination or set_wp_origin_and_destination having been called first
-    void shift_wp_origin_and_destination_to_current_pos_xy();
-
-    /// shifts the origin and destination horizontally to the achievable stopping point
-    ///     used to reset the track when horizontal navigation is enabled after having been disabled (see Copter's wp_navalt_min)
-    ///     relies on set_wp_destination or set_wp_origin_and_destination having been called first
-    void shift_wp_origin_and_destination_to_stopping_point_xy();
-
-    /// get_wp_stopping_point_xy - calculates stopping point based on current position, velocity, waypoint acceleration
-    ///		results placed in stopping_position vector
-    void get_wp_stopping_point_xy(Vector3f& stopping_point) const;
-    void get_wp_stopping_point(Vector3f& stopping_point) const;
-
-    /// get_wp_distance_to_destination - get horizontal distance to destination in cm
-    virtual float get_wp_distance_to_destination() const;
+    /// get_distance_to_destination - get horizontal distance to destination in cm
+    float get_distance_to_destination();
 
     /// get_bearing_to_destination - get bearing to next waypoint in centi-degrees
-    virtual int32_t get_wp_bearing_to_destination() const;
+    int32_t get_bearing_to_destination();
 
     /// reached_destination - true when we have come within RADIUS cm of the waypoint
-    virtual bool reached_wp_destination() const { return _flags.reached_destination; }
-
-    // reached_wp_destination_xy - true if within RADIUS_CM of waypoint in x/y
-    bool reached_wp_destination_xy() const {
-        return get_wp_distance_to_destination() < _wp_radius_cm;
-    }
+    bool reached_destination() const { return _flags.reached_destination; }
 
     /// set_fast_waypoint - set to true to ignore the waypoint radius and consider the waypoint 'reached' the moment the intermediate point reaches it
     void set_fast_waypoint(bool fast) { _flags.fast_waypoint = fast; }
 
-    /// update_wpnav - run the wp controller - should be called at 100hz or higher
-    virtual bool update_wpnav();
-
-    // check_wp_leash_length - check recalc_wp_leash flag and calls calculate_wp_leash_length() if necessary
-    //  should be called after _pos_control.update_xy_controller which may have changed the position controller leash lengths
-    void check_wp_leash_length();
-
-    /// calculate_wp_leash_length - calculates track speed, acceleration and leash lengths for waypoint controller
-    void calculate_wp_leash_length();
-
-    ///
-    /// spline methods
-    ///
-
-    // segment start types
-    // stop - vehicle is not moving at origin
-    // straight-fast - vehicle is moving, previous segment is straight.  vehicle will fly straight through the waypoint before beginning it's spline path to the next wp
-    //     _flag.segment_type holds whether prev segment is straight vs spline but we don't know if it has a delay
-    // spline-fast - vehicle is moving, previous segment is splined, vehicle will fly through waypoint but previous segment should have it flying in the correct direction (i.e. exactly parallel to position difference vector from previous segment's origin to this segment's destination)
-
-    // segment end types
-    // stop - vehicle is not moving at destination
-    // straight-fast - next segment is straight, vehicle's destination velocity should be directly along track from this segment's destination to next segment's destination
-    // spline-fast - next segment is spline, vehicle's destination velocity should be parallel to position difference vector from previous segment's origin to this segment's destination
-
-    // get target yaw in centi-degrees (used for wp and spline navigation)
-    float get_yaw() const;
-
-    /// set_spline_destination waypoint using location class
-    ///     returns false if conversion from location to vector from ekf origin cannot be calculated
-    ///     terrain_alt should be true if destination.z is a desired altitude above terrain (false if its desired altitude above ekf origin)
-    ///     stopped_at_start should be set to true if vehicle is stopped at the origin
-    ///     seg_end_type should be set to stopped, straight or spline depending upon the next segment's type
-    ///     next_destination should be set to the next segment's destination if the seg_end_type is SEGMENT_END_STRAIGHT or SEGMENT_END_SPLINE
-    bool set_spline_destination(const Location& destination, bool stopped_at_start, spline_segment_end_type seg_end_type, Location next_destination);
-
-    /// set_spline_destination waypoint using position vector (distance from ekf origin in cm)
-    ///     returns false if conversion from location to vector from ekf origin cannot be calculated
-    ///     terrain_alt should be true if destination.z is a desired altitudes above terrain (false if its desired altitudes above ekf origin)
-    ///     stopped_at_start should be set to true if vehicle is stopped at the origin
-    ///     seg_end_type should be set to stopped, straight or spline depending upon the next segment's type
-    ///     next_destination should be set to the next segment's destination if the seg_end_type is SEGMENT_END_STRAIGHT or SEGMENT_END_SPLINE
-    ///     next_destination.z  must be in the same "frame" as destination.z (i.e. if destination is a alt-above-terrain, next_destination should be too)
-    bool set_spline_destination(const Vector3f& destination, bool terrain_alt, bool stopped_at_start, spline_segment_end_type seg_end_type, const Vector3f& next_destination);
-
-    /// set_spline_origin_and_destination - set origin and destination waypoints using position vectors (distance from ekf origin in cm)
-    ///     terrain_alt should be true if origin.z and destination.z are desired altitudes above terrain (false if desired altitudes above ekf origin)
-    ///     stopped_at_start should be set to true if vehicle is stopped at the origin
-    ///     seg_end_type should be set to stopped, straight or spline depending upon the next segment's type
-    ///     next_destination should be set to the next segment's destination if the seg_end_type is SEGMENT_END_STRAIGHT or SEGMENT_END_SPLINE
-    bool set_spline_origin_and_destination(const Vector3f& origin, const Vector3f& destination, bool terrain_alt, bool stopped_at_start, spline_segment_end_type seg_end_type, const Vector3f& next_destination);
-
-    /// reached_spline_destination - true when we have come within RADIUS cm of the waypoint
-    bool reached_spline_destination() const { return _flags.reached_destination; }
-
-    /// update_spline - update spline controller
-    bool update_spline();
+    /// update_wp - update waypoint controller
+    void update_wpnav();
 
     ///
     /// shared methods
     ///
 
     /// get desired roll, pitch which should be fed into stabilize controllers
-    float get_roll() const { return _pos_control.get_roll(); }
-    float get_pitch() const { return _pos_control.get_pitch(); }
+    int32_t get_desired_roll() const { return _desired_roll; };
+    int32_t get_desired_pitch() const { return _desired_pitch; };
 
-    /// advance_wp_target_along_track - move target location along track from origin to destination
-    bool advance_wp_target_along_track(float dt);
+    /// get_desired_alt - get desired altitude (in cm above home) from loiter or wp controller which should be fed into throttle controller
+    float get_desired_alt() const { return _target.z; }
 
-    /// return the crosstrack_error - horizontal error of the actual position vs the desired position
-    float crosstrack_error() const { return _track_error_xy;}
+    /// set_desired_alt - set desired altitude (in cm above home)
+    void set_desired_alt(float desired_alt) { _target.z = desired_alt; }
+
+    /// set_cos_sin_yaw - short-cut to save on calculations to convert from roll-pitch frame to lat-lon frame
+    void set_cos_sin_yaw(float cos_yaw, float sin_yaw, float cos_pitch) {
+        _cos_yaw = cos_yaw;
+        _sin_yaw = sin_yaw;
+        _cos_pitch = cos_pitch;
+    }
+
+    /// set_althold_kP - pass in alt hold controller's P gain
+    void set_althold_kP(float kP) { if(kP>0.0f) _althold_kP = kP; }
+
+    /// set_horizontal_velocity - allows main code to pass target horizontal velocity for wp navigation
+    void set_horizontal_velocity(float velocity_cms) { _wp_speed_cms = velocity_cms; };
+
+    /// get_horizontal_velocity - allows main code to retrieve target horizontal velocity for wp navigation
+    float get_horizontal_velocity() { return _wp_speed_cms; };
+
+    /// get_climb_velocity - returns target climb speed in cm/s during missions
+    float get_climb_velocity() const { return _wp_speed_up_cms; };
+
+    /// get_descent_velocity - returns target descent speed in cm/s during missions.  Note: always positive
+    float get_descent_velocity() const { return _wp_speed_down_cms; };
+
+    /// get_waypoint_radius - access for waypoint radius in cm
+    float get_waypoint_radius() const { return _wp_radius_cm; }
+
+    /// get_waypoint_acceleration - returns acceleration in cm/s/s during missions
+    float get_waypoint_acceleration() const { return _wp_accel_cms.get(); }
+
+    /// set_lean_angle_max - limits maximum lean angle
+    void set_lean_angle_max(int16_t angle_cd) { if (angle_cd >= 1000 && angle_cd <= 8000) {_lean_angle_max_cd = angle_cd;} }
 
     static const struct AP_Param::GroupInfo var_info[];
 
 protected:
-
-    // segment types, either straight or spine
-    enum SegmentType {
-        SEGMENT_STRAIGHT = 0,
-        SEGMENT_SPLINE = 1
-    };
-
     // flags structure
     struct wpnav_flags {
         uint8_t reached_destination     : 1;    // true if we have reached the destination
         uint8_t fast_waypoint           : 1;    // true if we should ignore the waypoint radius and consider the waypoint complete once the intermediate target has reached the waypoint
-        uint8_t slowing_down            : 1;    // true when target point is slowing down before reaching the destination
-        uint8_t recalc_wp_leash         : 1;    // true if we need to recalculate the leash lengths because of changes in speed or acceleration
-        uint8_t new_wp_destination      : 1;    // true if we have just received a new destination.  allows us to freeze the position controller's xy feed forward
-        SegmentType segment_type        : 1;    // active segment is either straight or spline
-        uint8_t wp_yaw_set              : 1;    // true if yaw target has been set
     } _flags;
 
-    /// calc_slow_down_distance - calculates distance before waypoint that target point should begin to slow-down assuming it is traveling at full speed
-    void calc_slow_down_distance(float speed_cms, float accel_cmss);
+    /// translate_loiter_target_movements - consumes adjustments created by move_loiter_target
+    void translate_loiter_target_movements(float nav_dt);
 
-    /// get_slow_down_speed - returns target speed of target point based on distance from the destination (in cm)
-    float get_slow_down_speed(float dist_from_dest_cm, float accel_cmss);
-    
-    /// wp_speed_update - calculates how to change speed when changes are requested
-    void wp_speed_update(float dt);
+    /// get_loiter_position_to_velocity - loiter position controller
+    ///     converts desired position held in _target vector to desired velocity
+    void get_loiter_position_to_velocity(float dt, float max_speed_cms);
 
-    /// spline protected functions
+    /// get_loiter_velocity_to_acceleration - loiter velocity controller
+    ///    converts desired velocities in lat/lon directions to accelerations in lat/lon frame
+    void get_loiter_velocity_to_acceleration(float vel_lat_cms, float vel_lon_cms, float dt);
 
-    /// update_spline_solution - recalculates hermite_spline_solution grid
-    void update_spline_solution(const Vector3f& origin, const Vector3f& dest, const Vector3f& origin_vel, const Vector3f& dest_vel);
+    /// get_loiter_acceleration_to_lean_angles - loiter acceleration controller
+    ///    converts desired accelerations provided in lat/lon frame to roll/pitch angles
+    void get_loiter_acceleration_to_lean_angles(float accel_lat_cmss, float accel_lon_cmss);
 
-    /// advance_spline_target_along_track - move target location along track from origin to destination
-    ///     returns false if it is unable to advance (most likely because of missing terrain data)
-    bool advance_spline_target_along_track(float dt);
+    /// get_bearing_cd - return bearing in centi-degrees between two positions
+    float get_bearing_cd(const Vector3f &origin, const Vector3f &destination) const;
 
-    /// calc_spline_pos_vel - update position and velocity from given spline time
-    /// 	relies on update_spline_solution being called since the previous
-    void calc_spline_pos_vel(float spline_time, Vector3f& position, Vector3f& velocity);
+    /// reset_I - clears I terms from loiter PID controller
+    void reset_I();
 
-    // get terrain's altitude (in cm above the ekf origin) at the current position (+ve means terrain below vehicle is above ekf origin's altitude)
-    bool get_terrain_offset(float& offset_cm);
+    /// calculate_loiter_leash_length - calculates the maximum distance in cm that the target position may be from the current location
+    void calculate_loiter_leash_length();
 
-    // convert location to vector from ekf origin.  terrain_alt is set to true if resulting vector's z-axis should be treated as alt-above-terrain
-    //      returns false if conversion failed (likely because terrain data was not available)
-    bool get_vector_NEU(const Location &loc, Vector3f &vec, bool &terrain_alt);
+    /// calculate_wp_leash_length - calculates horizontal and vertical leash lengths for waypoint controller
+    ///    set climb param to true if track climbs vertically, false if descending
+    void calculate_wp_leash_length(bool climb);
 
-    // set heading used for spline and waypoint navigation
-    void set_yaw_cd(float heading_cd);
+    // references to inertial nav and ahrs libraries
+    const AP_InertialNav* const _inav;
+    const AP_AHRS*        const _ahrs;
 
-    // references and pointers to external libraries
-    const AP_InertialNav&   _inav;
-    const AP_AHRS_View&     _ahrs;
-    AC_PosControl&          _pos_control;
-    const AC_AttitudeControl& _attitude_control;
-    AP_Terrain              *_terrain;
+    // pointers to pid controllers
+    APM_PI*		const _pid_pos_lat;
+    APM_PI*		const _pid_pos_lon;
+    AC_PID*		const _pid_rate_lat;
+    AC_PID*		const _pid_rate_lon;
 
     // parameters
-    AP_Float    _wp_speed_cms;          // default maximum horizontal speed in cm/s during missions
-    AP_Float    _wp_speed_up_cms;       // default maximum climb rate in cm/s
-    AP_Float    _wp_speed_down_cms;     // default maximum descent rate in cm/s
+    AP_Float    _loiter_speed_cms;      // maximum horizontal speed in cm/s while in loiter
+    AP_Float    _wp_speed_cms;          // maximum horizontal speed in cm/s during missions
+    AP_Float    _wp_speed_up_cms;       // climb speed target in cm/s
+    AP_Float    _wp_speed_down_cms;     // descent speed target in cm/s
     AP_Float    _wp_radius_cm;          // distance from a waypoint in cm that, when crossed, indicates the wp has been reached
-    AP_Float    _wp_accel_cmss;          // horizontal acceleration in cm/s/s during missions
-    AP_Float    _wp_accel_z_cmss;        // vertical acceleration in cm/s/s during missions
+    AP_Float    _wp_accel_cms;          // acceleration in cm/s/s during missions
+    uint8_t     _loiter_step;           // used to decide which portion of loiter controller to run during this iteration
+    uint8_t     _wpnav_step;            // used to decide which portion of wpnav controller to run during this iteration
+    uint32_t	_loiter_last_update;    // time of last update_loiter call
+    uint32_t	_wpnav_last_update;     // time of last update_wpnav call
+    float       _loiter_dt;             // time difference since last loiter call
+    float       _wpnav_dt;              // time difference since last loiter call
+    float       _cos_yaw;               // short-cut to save on calcs required to convert roll-pitch frame to lat-lon frame
+    float       _sin_yaw;
+    float       _cos_pitch;
+    float       _althold_kP;            // alt hold's P gain
+
+    // output from controller
+    int32_t     _desired_roll;          // fed to stabilize controllers at 50hz
+    int32_t     _desired_pitch;         // fed to stabilize controllers at 50hz
+
+    // loiter controller internal variables
+    Vector3f    _target;   		        // loiter's target location in cm from home
+    int16_t     _pilot_vel_forward_cms; // pilot's desired velocity forward (body-frame)
+    int16_t     _pilot_vel_right_cms;   // pilot's desired velocity right (body-frame)
+    Vector3f    _target_vel;            // pilot's latest desired velocity in earth-frame
+    Vector3f    _vel_last;              // previous iterations velocity in cm/s
+    float       _loiter_leash;          // loiter's horizontal leash length in cm.  used to stop the pilot from pushing the target location too far from the current location
+    float       _loiter_accel_cms;      // loiter's acceleration in cm/s/s
+    int16_t     _lean_angle_max_cd;     // maximum lean angle in centi-degrees
 
     // waypoint controller internal variables
-    uint32_t    _wp_last_update;        // time of last update_wpnav call
-    float       _wp_desired_speed_xy_cms;   // desired wp speed in cm/sec
-    Vector3f    _origin;                // starting point of trip to next waypoint in cm from ekf origin
-    Vector3f    _destination;           // target destination in cm from ekf origin
+    Vector3f    _origin;                // starting point of trip to next waypoint in cm from home (equivalent to next_WP)
+    Vector3f    _destination;           // target destination in cm from home (equivalent to next_WP)
     Vector3f    _pos_delta_unit;        // each axis's percentage of the total track from origin to destination
-    float       _track_error_xy;        // horizontal error of the actual position vs the desired position
     float       _track_length;          // distance in cm between origin and destination
-    float       _track_length_xy;       // horizontal distance in cm between origin and destination
     float       _track_desired;         // our desired distance along the track in cm
+    float       _distance_to_target;    // distance to loiter target
+    float       _wp_leash_xy;           // horizontal leash length in cm
+    float       _wp_leash_z;            // horizontal leash length in cm
     float       _limited_speed_xy_cms;  // horizontal speed in cm/s used to advance the intermediate target towards the destination.  used to limit extreme acceleration after passing a waypoint
     float       _track_accel;           // acceleration along track
     float       _track_speed;           // speed in cm/s along track
     float       _track_leash_length;    // leash length along track
-    float       _slow_down_dist;        // vehicle should begin to slow down once it is within this distance from the destination
 
-    // spline variables
-    float       _spline_time;           // current spline time between origin and destination
-    float       _spline_time_scale;     // current spline time between origin and destination
-    Vector3f    _spline_origin_vel;     // the target velocity vector at the origin of the spline segment
-    Vector3f    _spline_destination_vel;// the target velocity vector at the destination point of the spline segment
-    Vector3f    _hermite_spline_solution[4]; // array describing spline path between origin and destination
-    float       _spline_vel_scaler;	    //
-    float       _yaw;                   // heading according to yaw
+public:
+    // for logging purposes
+    Vector2f dist_error;                // distance error calculated by loiter controller
+    Vector2f desired_vel;               // loiter controller desired velocity
+    Vector2f desired_accel;             // the resulting desired acceleration
 
-    // terrain following variables
-    bool        _terrain_alt;   // true if origin and destination.z are alt-above-terrain, false if alt-above-ekf-origin
-    bool        _rangefinder_available;
-    AP_Int8     _rangefinder_use;
-    bool        _rangefinder_healthy;
-    float       _rangefinder_alt_cm;
+    // To-Do: add split of fast (100hz for accel->angle) and slow (10hz for navigation)
+    /// update - run the loiter and wpnav controllers - should be called at 100hz
+    //void update_100hz(void);
+    /// update - run the loiter and wpnav controllers - should be called at 10hz
+    //void update_10hz(void);
 };
+#endif	// AC_WPNAV_H

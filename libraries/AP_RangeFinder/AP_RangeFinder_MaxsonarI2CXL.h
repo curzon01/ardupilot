@@ -1,43 +1,41 @@
-#pragma once
+// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 
-#include "AP_RangeFinder.h"
-#include "AP_RangeFinder_Backend.h"
-#include <AP_HAL/I2CDevice.h>
+#ifndef __AP_RANGEFINDER_MAXSONARI2CXL_H__
+#define __AP_RANGEFINDER_MAXSONARI2CXL_H__
+
+#include "RangeFinder.h"
 
 #define AP_RANGE_FINDER_MAXSONARI2CXL_DEFAULT_ADDR   0x70
+
+#define AP_RANGEFINDER_MAXSONARI2CXL                4
+#define AP_RANGE_FINDER_MAXSONARI2CXL_SCALER        1.0
+#define AP_RANGE_FINDER_MAXSONARI2CXL_MIN_DISTANCE  20
+#define AP_RANGE_FINDER_MAXSONARI2CXL_MAX_DISTANCE  765
+
 #define AP_RANGE_FINDER_MAXSONARI2CXL_COMMAND_TAKE_RANGE_READING 0x51
 
-class AP_RangeFinder_MaxsonarI2CXL : public AP_RangeFinder_Backend
+class AP_RangeFinder_MaxsonarI2CXL : public RangeFinder
 {
-public:
-    // static detection function
-    static AP_RangeFinder_Backend *detect(RangeFinder::RangeFinder_State &_state,
-                                          AP_RangeFinder_Params &_params,
-                                          AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev);
 
-    // update state
-    void update(void) override;
+public:
+
+    // constructor
+    AP_RangeFinder_MaxsonarI2CXL(FilterInt16 *filter);
+
+    // init - simply sets the i2c address
+    void init(uint8_t address = AP_RANGE_FINDER_MAXSONARI2CXL_DEFAULT_ADDR) { _addr = address; }
+
+    // take_reading - ask sensor to make a range reading
+    bool            take_reading();
+
+    // read value from sensor and return distance in cm
+    int             read();
+
+    // heath
+    bool            healthy;
 
 protected:
+    uint8_t _addr;
 
-    MAV_DISTANCE_SENSOR _get_mav_distance_sensor_type() const override {
-        return MAV_DISTANCE_SENSOR_ULTRASOUND;
-    }
-
-private:
-    // constructor
-    AP_RangeFinder_MaxsonarI2CXL(RangeFinder::RangeFinder_State &_state,
-    								AP_RangeFinder_Params &_params,
-                                 AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev);
-
-    bool _init(void);
-    void _timer(void);
-
-    uint16_t distance;
-    bool new_distance;
-    
-    // start a reading
-    bool start_reading(void);
-    bool get_reading(uint16_t &reading_cm);
-    AP_HAL::OwnPtr<AP_HAL::I2CDevice> _dev;
 };
+#endif  // __AP_RANGEFINDER_MAXSONARI2CXL_H__

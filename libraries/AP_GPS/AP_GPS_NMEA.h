@@ -1,3 +1,4 @@
+// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 /*
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -41,37 +42,50 @@
 /// qualifier field (this is common with e.g. older SiRF units) it is
 /// not considered a source of fix-valid information.
 ///
-#pragma once
 
-#include "AP_GPS.h"
-#include "GPS_Backend.h"
+
+#ifndef __AP_GPS_NMEA_H__
+#define __AP_GPS_NMEA_H__
+
+#include <AP_HAL.h>
+#include "GPS.h"
+#include <AP_Progmem.h>
+
 
 /// NMEA parser
 ///
-class AP_GPS_NMEA : public AP_GPS_Backend
+class AP_GPS_NMEA : public GPS
 {
-    friend class AP_GPS_NMEA_Test;
-
 public:
+	AP_GPS_NMEA(void) : 
+	GPS(),
+	_parity(0),
+	_is_checksum_term(false),
+	_sentence_type(0),
+	_term_number(0),
+	_term_offset(0),
+	_gps_data_good(false)
+		{}
 
-    using AP_GPS_Backend::AP_GPS_Backend;
+    /// Perform a (re)initialisation of the GPS; sends the
+    /// protocol configuration messages.
+    ///
+    virtual void        init(AP_HAL::UARTDriver *s, enum GPS_Engine_Setting nav_setting = GPS_ENGINE_NONE);
 
     /// Checks the serial receive buffer for characters,
     /// attempts to parse NMEA data and updates internal state
     /// accordingly.
-    bool        read() override;
+    ///
+    virtual bool        read();
 
-	static bool _detect(struct NMEA_detect_state &state, uint8_t data);
-
-    const char *name() const override { return "NMEA"; }
+	static bool _detect(uint8_t data);
 
 private:
     /// Coding for the GPS sentences that the parser handles
     enum _sentence_types {      //there are some more than 10 fields in some sentences , thus we have to increase these value.
-        _GPS_SENTENCE_RMC = 32,
-        _GPS_SENTENCE_GGA = 64,
-        _GPS_SENTENCE_VTG = 96,
-        _GPS_SENTENCE_HDT = 128,
+        _GPS_SENTENCE_GPRMC = 32,
+        _GPS_SENTENCE_GPGGA = 64,
+        _GPS_SENTENCE_GPVTG = 96,
         _GPS_SENTENCE_OTHER = 0
     };
 
@@ -83,13 +97,20 @@ private:
     ///
     bool                        _decode(char c);
 
-    /// Parses the @p as a NMEA-style decimal number with
-    /// up to 3 decimal digits.
+    /// Return the numeric value of an ascii hex character
     ///
-    /// @returns		The value expressed by the string in @p,
+    /// @param	a		The character to be converted
+    /// @returns		The value of the character as a hex digit
+    ///
+    int16_t                     _from_hex(char a);
+
+    /// Parses the current term as a NMEA-style decimal number with
+    /// up to two decimal digits.
+    ///
+    /// @returns		The value expressed by the string in _term,
     ///					multiplied by 100.
     ///
-    static int32_t _parse_decimal_100(const char *p);
+    uint32_t    _parse_decimal_100();
 
     /// Parses the current term as a NMEA-style degrees + minutes
     /// value with up to four decimal digits.
@@ -111,16 +132,12 @@ private:
     ///					an update to the GPS state.
     bool                        _term_complete();
 
-    /// return true if we have a new set of NMEA messages
-    bool _have_new_message(void);
-
     uint8_t _parity;                                                    ///< NMEA message checksum accumulator
     bool _is_checksum_term;                                     ///< current term is the checksum
     char _term[15];                                                     ///< buffer for the current term within the current sentence
     uint8_t _sentence_type;                                     ///< the sentence type currently being processed
     uint8_t _term_number;                                       ///< term index within the current sentence
     uint8_t _term_offset;                                       ///< character offset with the term being received
-    uint16_t _sentence_length;
     bool _gps_data_good;                                        ///< set when the sentence indicates data is good
 
     // The result of parsing terms within a message is stored temporarily until
@@ -133,33 +150,25 @@ private:
     int32_t _new_altitude;                                      ///< altitude parsed from a term
     int32_t _new_speed;                                                 ///< speed parsed from a term
     int32_t _new_course;                                        ///< course parsed from a term
-    float   _new_gps_yaw;                                        ///< yaw parsed from a term
-    uint16_t _new_hdop;                                                 ///< HDOP parsed from a term
+    int16_t _new_hdop;                                                  ///< HDOP parsed from a term
     uint8_t _new_satellite_count;                       ///< satellite count parsed from a term
-    uint8_t _new_quality_indicator;                                     ///< GPS quality indicator parsed from a term
-
-    uint32_t _last_RMC_ms = 0;
-    uint32_t _last_GGA_ms = 0;
-    uint32_t _last_VTG_ms = 0;
-    uint32_t _last_HDT_ms = 0;
 
     /// @name	Init strings
     ///			In ::init, an attempt is made to configure the GPS
     ///			unit to send just the messages that we are interested
     ///			in using these strings
     //@{
-    static const char _SiRF_init_string[];         ///< init string for SiRF units
-    static const char _MTK_init_string[];                  ///< init string for MediaTek units
-    static const char _ublox_init_string[];        ///< init string for ublox units
+    static const prog_char _SiRF_init_string[];         ///< init string for SiRF units
+    static const prog_char _MTK_init_string[];                  ///< init string for MediaTek units
+    static const prog_char _ublox_init_string[];        ///< init string for ublox units
     //@}
 
-    static const char _initialisation_blob[];
+    /// @name	GPS message identifier strings
+    //@{
+    static const prog_char _gprmc_string[];
+    static const prog_char _gpgga_string[];
+    static const prog_char _gpvtg_string[];
+    //@}
 };
 
-#define AP_GPS_NMEA_HEMISPHERE_INIT_STRING \
-        "$JATT,NMEAHE,0\r\n" /* Prefix of GP on the HDT message */      \
-        "$JASC,GPGGA,5\r\n" /* GGA at 5Hz */                            \
-        "$JASC,GPRMC,5\r\n" /* RMC at 5Hz */                            \
-        "$JASC,GPVTG,5\r\n" /* VTG at 5Hz */                            \
-        "$JASC,GPHDT,5\r\n" /* HDT at 5Hz */                            \
-        "$JMODE,SBASR,YES\r\n" /* Enable SBAS */
+#endif // __AP_GPS_NMEA_H__

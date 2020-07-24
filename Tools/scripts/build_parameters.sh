@@ -1,37 +1,31 @@
 #!/bin/bash
 
 set -e
-set -x
-
-PARAMS_DIR="../buildlogs/Parameters"
 
 # work from either APM directory or above
 [ -d ArduPlane ] || cd APM
 
-/bin/mkdir -p "$PARAMS_DIR"
-
-generate_parameters() {
-    VEHICLE="$1"
-
-    # generate Parameters.html, Parameters.rst etc etc:
-    ./Tools/autotest/param_metadata/param_parse.py --vehicle $VEHICLE
-
-    # stash some of the results away:
-    VEHICLE_PARAMS_DIR="$PARAMS_DIR/$VEHICLE"
-    mkdir -p "$VEHICLE_PARAMS_DIR"
-    /bin/cp Parameters.wiki Parameters.html *.pdef.xml "$VEHICLE_PARAMS_DIR/"
-    if [ -e "Parameters.rst" ]; then
-	/bin/cp Parameters.rst "$VEHICLE_PARAMS_DIR/"
-    fi
+./Tools/autotest/param_metadata/param_parse.py > param.out || {
+    echo "Parameter parsing failed"
+    exit 1
 }
+/bin/mkdir -p ../buildlogs/Parameters
+/bin/cp Parameters.wiki Parameters.html *.pdef.xml ../buildlogs/Parameters/
 
+[ -d $HOME/WP_Auth ] && {
+    # now upload to WordPress
+    ./Tools/autotest/param_metadata/param_parse.py --vehicle ArduPlane
+    ./Tools/scripts/update_wiki.py --url http://plane.ardupilot.com $(cat $HOME/WP_Auth/plane.auth) --post-title='ArduPlane Parameters' Parameters.html
+    mkdir -p ../buildlogs/Parameters/ArduPlane
+    /bin/cp Parameters.wiki Parameters.html *.pdef.xml ../buildlogs/Parameters/ArduPlane
 
-generate_parameters ArduPlane
+    ./Tools/autotest/param_metadata/param_parse.py --vehicle ArduCopter
+    ./Tools/scripts/update_wiki.py --url http://copter.ardupilot.com $(cat $HOME/WP_Auth/copter.auth) --post-title='ArduCopter Parameters' Parameters.html
+    mkdir -p ../buildlogs/Parameters/ArduCopter
+    /bin/cp Parameters.wiki Parameters.html *.pdef.xml ../buildlogs/Parameters/ArduCopter
 
-generate_parameters ArduCopter
-
-generate_parameters Rover
-
-generate_parameters ArduSub
-
-generate_parameters AntennaTracker
+    ./Tools/autotest/param_metadata/param_parse.py --vehicle APMrover2
+    ./Tools/scripts/update_wiki.py --url http://rover.ardupilot.com $(cat $HOME/WP_Auth/rover.auth) --post-title='APMrover2 Parameters' Parameters.html
+    mkdir -p ../buildlogs/Parameters/APMrover2
+    /bin/cp Parameters.wiki Parameters.html *.pdef.xml ../buildlogs/Parameters/APMrover2
+}

@@ -1,30 +1,39 @@
-#pragma once
 
-#include "AP_HAL_Empty.h"
+#ifndef __AP_HAL_EMPTY_GPIO_H__
+#define __AP_HAL_EMPTY_GPIO_H__
 
-class Empty::GPIO : public AP_HAL::GPIO {
+#include <AP_HAL_Empty.h>
+
+class Empty::EmptyGPIO : public AP_HAL::GPIO {
 public:
-    GPIO();
-    void    init() override;
-    void    pinMode(uint8_t pin, uint8_t output) override;
-    uint8_t read(uint8_t pin) override;
-    void    write(uint8_t pin, uint8_t value) override;
-    void    toggle(uint8_t pin) override;
+    EmptyGPIO();
+    void    init();
+    void    pinMode(uint8_t pin, uint8_t output);
+    int8_t  analogPinToDigitalPin(uint8_t pin);
+    uint8_t read(uint8_t pin);
+    void    write(uint8_t pin, uint8_t value);
+    void    toggle(uint8_t pin);
 
     /* Alternative interface: */
-    AP_HAL::DigitalSource* channel(uint16_t n) override;
+    AP_HAL::DigitalSource* channel(uint16_t n);
+
+    /* Interrupt interface: */
+    bool    attach_interrupt(uint8_t interrupt_num, AP_HAL::Proc p,
+            uint8_t mode);
 
     /* return true if USB cable is connected */
-    bool    usb_connected(void) override;
+    bool    usb_connected(void);
 };
 
-class Empty::DigitalSource : public AP_HAL::DigitalSource {
+class Empty::EmptyDigitalSource : public AP_HAL::DigitalSource {
 public:
-    DigitalSource(uint8_t v);
-    void    mode(uint8_t output) override;
-    uint8_t read() override;
-    void    write(uint8_t value) override;
-    void    toggle() override;
+    EmptyDigitalSource(uint8_t v);
+    void    mode(uint8_t output);
+    uint8_t read();
+    void    write(uint8_t value); 
+    void    toggle();
 private:
     uint8_t _v;
 };
+
+#endif // __AP_HAL_EMPTY_GPIO_H__

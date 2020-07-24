@@ -1,21 +1,24 @@
-#pragma once
 
-#include <AP_HAL/AP_HAL_Boards.h>
-#include <stdint.h>
-#include <AP_HAL/AP_HAL_Macros.h>
-#include <AP_HAL/Semaphores.h>
+#ifndef __AP_HAL_LINUX_SEMAPHORE_H__
+#define __AP_HAL_LINUX_SEMAPHORE_H__
+
+#include <AP_HAL_Boards.h>
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_LINUX
+#include <AP_HAL_Linux.h>
 #include <pthread.h>
 
-namespace Linux {
-
-class Semaphore : public AP_HAL::Semaphore {
+class Linux::LinuxSemaphore : public AP_HAL::Semaphore {
 public:
-    Semaphore();
-    bool give() override;
-    bool take(uint32_t timeout_ms) override;
-    bool take_nonblocking() override;
-protected:
+    LinuxSemaphore() {
+        pthread_mutex_init(&_lock, NULL);
+    }
+    bool give();
+    bool take(uint32_t timeout_ms);
+    bool take_nonblocking();
+private:
     pthread_mutex_t _lock;
 };
+#endif // CONFIG_HAL_BOARD
 
-}
+#endif // __AP_HAL_LINUX_SEMAPHORE_H__

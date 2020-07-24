@@ -1,13 +1,17 @@
-#pragma once
 
-#include "AP_HAL_Empty.h"
+#ifndef __AP_HAL_EMPTY_SEMAPHORE_H__
+#define __AP_HAL_EMPTY_SEMAPHORE_H__
 
-class Empty::Semaphore : public AP_HAL::Semaphore {
+#include <AP_HAL_Empty.h>
+
+class Empty::EmptySemaphore : public AP_HAL::Semaphore {
 public:
-    Semaphore() : _taken(false) {}
-    bool give() override;
-    bool take(uint32_t timeout_ms) override;
-    bool take_nonblocking() override;
+    EmptySemaphore() : _taken(false) {}
+    bool give();
+    bool take(uint32_t timeout_ms);
+    bool take_nonblocking();
 private:
     bool _taken;
 };
+
+#endif // __AP_HAL_EMPTY_SEMAPHORE_H__

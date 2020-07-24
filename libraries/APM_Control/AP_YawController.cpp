@@ -1,14 +1,15 @@
+// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
 /*
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation, either version 3 of the License, or
    (at your option) any later version.
-   
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
-   
+
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
@@ -17,43 +18,40 @@
 //  Modified by Paul Riseborough to implement a three loop autopilot
 //  topology
 //
-#include <AP_HAL/AP_HAL.h>
+#include <AP_Math.h>
+#include <AP_HAL.h>
 #include "AP_YawController.h"
 
 extern const AP_HAL::HAL& hal;
 
-const AP_Param::GroupInfo AP_YawController::var_info[] = {
+const AP_Param::GroupInfo AP_YawController::var_info[] PROGMEM = {
 
 	// @Param: SLIP
 	// @DisplayName: Sideslip control gain
-	// @Description: Gain from lateral acceleration to demanded yaw rate for aircraft with enough fuselage area to detect lateral acceleration and sideslips. Do not enable for flying wings and gliders. Actively coordinates flight more than just yaw damping. Set after YAW2SRV_DAMP and YAW2SRV_INT are tuned.
+	// @Description: This is the gain from measured lateral acceleration to demanded yaw rate. It should be set to zero unless active control of sideslip is desired. This will only work effectively if there is enough fuselage side area to generate a measureable lateral acceleration when the model sideslips. Flying wings and most gliders cannot use this term. This term should only be adjusted after the basic yaw damper gain YAW2SRV_DAMP is tuned and the YAW2SRV_INT integrator gain has been set. Set this gain to zero if only yaw damping is required.
 	// @Range: 0 4
 	// @Increment: 0.25
-    // @User: Advanced
 	AP_GROUPINFO("SLIP",    0, AP_YawController, _K_A,    0),
 
 	// @Param: INT
-	// @DisplayName: Sideslip control integrator
-	// @Description: Integral gain from lateral acceleration error. Effectively trims rudder to eliminate long-term sideslip.
+	// @DisplayName: Sidelsip control integrator
+	// @Description: This is the integral gain from lateral acceleration error. This gain should only be non-zero if active control over sideslip is desired. If active control over sideslip is required then this can be set to 1.0 as a first try.
 	// @Range: 0 2
 	// @Increment: 0.25
-    // @User: Advanced
 	AP_GROUPINFO("INT",    1, AP_YawController, _K_I,    0),
 
 	// @Param: DAMP
 	// @DisplayName: Yaw damping
-	// @Description: Gain from yaw rate to rudder. Most effective at yaw damping and should be tuned after KFF_RDDRMIX. Also disables YAW2SRV_INT if set to 0.
+	// @Description: This is the gain from yaw rate to rudder. It acts as a damper on yaw motion. If a basic yaw damper is required, this gain term can be incremented, whilst leaving the YAW2SRV_SLIP and YAW2SRV_INT gains at zero. Note that unlike with a standard PID controller, if this damping term is zero then the integrator will also be disabled.
 	// @Range: 0 2
 	// @Increment: 0.25
-    // @User: Advanced
 	AP_GROUPINFO("DAMP",   2, AP_YawController, _K_D,    0),
 
 	// @Param: RLL
 	// @DisplayName: Yaw coordination gain
-	// @Description: Gain to the yaw rate required to keep it consistent with the turn rate in a coordinated turn. Corrects for yaw tendencies after the turn is established. Increase yaw into the turn by raising. Increase yaw out of the turn by decreasing. Values outside of 0.9-1.1 range indicate airspeed calibration problems.
+	// @Description: This is the gain term that is applied to the yaw rate offset calculated as required to keep the yaw rate consistent with the turn rate for a coordinated turn. The default value is 1 which will work for all models. Advanced users can use it to correct for any tendency to yaw away from or into the turn once the turn is established. Increase to make the model yaw more initially and decrease to make the model yaw less initially. If values greater than 1.1 or less than 0.9 are required then it normally indicates a problem with the airspeed calibration.
 	// @Range: 0.8 1.2
 	// @Increment: 0.05
-    // @User: Advanced
 	AP_GROUPINFO("RLL",   3, AP_YawController, _K_FF,   1),
 
     /*
@@ -64,7 +62,7 @@ const AP_Param::GroupInfo AP_YawController::var_info[] = {
 
 	// @Param: IMAX
 	// @DisplayName: Integrator limit
-	// @Description: Limit of yaw integrator gain in centi-degrees of servo travel. Servos are assumed to have +/- 4500 centi-degrees of travel, so a value of 1500 allows trim of up to 1/3 of servo travel range.
+	// @Description: This limits the number of centi-degrees of rudder over which the integrator will operate. At the default setting of 1500 centi-degrees, the integrator will be limited to +- 15 degrees of servo travel. The maximum servo deflection is +- 45 degrees, so the default value represents a 1/3rd of the total control throw which is adequate for most aircraft unless they are severely out of trim or have very limited rudder control effectiveness.
 	// @Range: 0 4500
 	// @Increment: 1
 	// @User: Advanced
@@ -75,7 +73,7 @@ const AP_Param::GroupInfo AP_YawController::var_info[] = {
 
 int32_t AP_YawController::get_servo_out(float scaler, bool disable_integrator)
 {
-	uint32_t tnow = AP_HAL::millis();
+	uint32_t tnow = hal.scheduler->millis();
 	uint32_t dt = tnow - _last_t;
 	if (_last_t == 0 || dt > 1000) {
 		dt = 0;
@@ -98,17 +96,17 @@ int32_t AP_YawController::get_servo_out(float scaler, bool disable_integrator)
 	if (fabsf(bank_angle) < 1.5707964f)	{
 	    bank_angle = constrain_float(bank_angle,-1.3962634f,1.3962634f);
 	}
-	if (!_ahrs.airspeed_estimate(aspeed)) {
+	if (!_ahrs.airspeed_estimate(&aspeed)) {
 	    // If no airspeed available use average of min and max
         aspeed = 0.5f*(float(aspd_min) + float(aparm.airspeed_max));
 	}
-    rate_offset = (GRAVITY_MSS / MAX(aspeed , float(aspd_min))) * sinf(bank_angle) * _K_FF;
+    rate_offset = (GRAVITY_MSS / max(aspeed , float(aspd_min))) * tanf(bank_angle) * cosf(bank_angle) * _K_FF;
 
     // Get body rate vector (radians/sec)
 	float omega_z = _ahrs.get_gyro().z;
 	
 	// Get the accln vector (m/s^2)
-	float accel_y = AP::ins().get_accel().y;
+	float accel_y = _ahrs.get_ins().get_accel().y;
 
 	// Subtract the steady turn component of rate from the measured rate
 	// to calculate the rate relative to the turn requirement in degrees/sec
@@ -134,10 +132,10 @@ int32_t AP_YawController::get_servo_out(float scaler, bool disable_integrator)
 		{
 			// prevent the integrator from increasing if surface defln demand is above the upper limit
 			if (_last_out < -45) {
-                _integrator += MAX(integ_in * delta_time , 0);
+                _integrator += max(integ_in * delta_time , 0);
             } else if (_last_out > 45) {
                 // prevent the integrator from decreasing if surface defln demand  is below the lower limit
-                _integrator += MIN(integ_in * delta_time , 0);
+                _integrator += min(integ_in * delta_time , 0);
 			} else {
                 _integrator += integ_in * delta_time;
             }
@@ -168,9 +166,7 @@ int32_t AP_YawController::get_servo_out(float scaler, bool disable_integrator)
 	// Save to last value before application of limiter so that integrator limiting
 	// can detect exceedance next frame
 	// Scale using inverse dynamic pressure (1/V^2)
-	_pid_info.I = _K_D * _integrator * scaler * scaler;
-	_pid_info.D = _K_D * (-rate_hp_out) * scaler * scaler;
-	_last_out =  _pid_info.I + _pid_info.D;
+	_last_out =  _K_D * (_integrator - rate_hp_out) * scaler * scaler;
 
 	// Convert to centi-degrees and constrain
 	return constrain_float(_last_out * 100, -4500, 4500);

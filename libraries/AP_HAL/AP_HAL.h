@@ -1,14 +1,18 @@
-#pragma once
+
+#ifndef __AP_HAL_H__
+#define __AP_HAL_H__
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "AP_HAL_Namespace.h"
 #include "AP_HAL_Boards.h"
 #include "AP_HAL_Macros.h"
-#include "AP_HAL_Main.h"
 
 /* HAL Module Classes (all pure virtual) */
 #include "UARTDriver.h"
+#include "I2CDriver.h"
+#include "SPIDriver.h"
 #include "AnalogIn.h"
 #include "Storage.h"
 #include "GPIO.h"
@@ -17,17 +21,13 @@
 #include "Scheduler.h"
 #include "Semaphores.h"
 #include "Util.h"
-#include "OpticalFlow.h"
-#include "Flash.h"
-#include "DSP.h"
 
-#if HAL_WITH_UAVCAN
-#include "CAN.h"
-#endif
-
+#include "utility/Print.h"
+#include "utility/Stream.h"
 #include "utility/BetterStream.h"
 
 /* HAL Class definition */
 #include "HAL.h"
 
-#include "system.h"
+#endif // __AP_HAL_H__
+

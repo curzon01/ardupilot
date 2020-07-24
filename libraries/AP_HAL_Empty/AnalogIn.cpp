@@ -2,40 +2,43 @@
 
 using namespace Empty;
 
-AnalogSource::AnalogSource(float v) :
+EmptyAnalogSource::EmptyAnalogSource(float v) :
     _v(v)
 {}
 
-float AnalogSource::read_average() {
+float EmptyAnalogSource::read_average() {
     return _v;
 }
 
-float AnalogSource::voltage_average() {
-    return 5.0f * _v / 1024.0f;
+float EmptyAnalogSource::voltage_average() {
+    return 5.0 * _v / 1024.0;
 }
 
-float AnalogSource::voltage_latest() {
-    return 5.0f * _v / 1024.0f;
+float EmptyAnalogSource::voltage_latest() {
+    return 5.0 * _v / 1024.0;
 }
 
-float AnalogSource::read_latest() {
+float EmptyAnalogSource::read_latest() {
     return _v;
 }
 
-void AnalogSource::set_pin(uint8_t p)
+void EmptyAnalogSource::set_pin(uint8_t p)
 {}
 
-AnalogIn::AnalogIn()
+void EmptyAnalogSource::set_stop_pin(uint8_t p)
 {}
 
-void AnalogIn::init()
+void EmptyAnalogSource::set_settle_time(uint16_t settle_time_ms)
 {}
 
-AP_HAL::AnalogSource* AnalogIn::channel(int16_t n) {
-    return new AnalogSource(1.11);
+EmptyAnalogIn::EmptyAnalogIn()
+{}
+
+void EmptyAnalogIn::init(void* machtnichts)
+{}
+
+AP_HAL::AnalogSource* EmptyAnalogIn::channel(int16_t n) {
+    return new EmptyAnalogSource(1.11);
 }
 
-float AnalogIn::board_voltage(void)
-{
-    return 5.0f;
-}
+

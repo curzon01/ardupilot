@@ -1,212 +1,128 @@
-#pragma once
+/// -*- tab-width: 4; Mode: C++; c-basic-offset: 4; indent-tabs-mode: nil -*-
+#ifndef AP_BATTMONITOR_H
+#define AP_BATTMONITOR_H
 
-#include <AP_Common/AP_Common.h>
-#include <AP_Param/AP_Param.h>
-#include <AP_Math/AP_Math.h>
-#include <GCS_MAVLink/GCS_MAVLink.h>
-#include "AP_BattMonitor_Params.h"
+#include <inttypes.h>
+#include <AP_Common.h>
+#include <AP_Param.h>
+#include <AP_Math.h>                // ArduPilot Mega Vector/Matrix math Library
+#include <AP_ADC.h>                 // ArduPilot Mega Analog to Digital Converter Library
+#include <AP_ADC_AnalogSource.h>
 
-// maximum number of battery monitors
-#define AP_BATT_MONITOR_MAX_INSTANCES       9
+// battery monitor types
+#define AP_BATT_MONITOR_DISABLED            0
+#define AP_BATT_MONITOR_VOLTAGE_ONLY        3
+#define AP_BATT_MONITOR_VOLTAGE_AND_CURRENT 4
 
-// first monitor is always the primary monitor
-#define AP_BATT_PRIMARY_INSTANCE            0
-
-#define AP_BATT_SERIAL_NUMBER_DEFAULT       -1
-
-#define AP_BATT_MONITOR_TIMEOUT             5000
-
-#define AP_BATT_MONITOR_RES_EST_TC_1        0.5f
-#define AP_BATT_MONITOR_RES_EST_TC_2        0.1f
-
-#define AP_BATT_MONITOR_CELLS_MAX           12
-
-#ifndef HAL_BATTMON_SMBUS_ENABLE
-#define HAL_BATTMON_SMBUS_ENABLE 1
+// setup default mag orientation for each board type
+#if CONFIG_HAL_BOARD == HAL_BOARD_APM1
+ # define AP_BATT_VOLT_PIN                  0       // Battery voltage on A0
+ # define AP_BATT_CURR_PIN                  1       // Battery current on A1
+ # define AP_BATT_VOLTDIVIDER_DEFAULT       3.56    // on-board APM1 voltage divider with a 3.9kOhm resistor
+ # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT  0
+#elif CONFIG_HAL_BOARD == HAL_BOARD_APM2
+ # define AP_BATT_VOLT_PIN                  13      // APM2.5/2.6 with 3dr power module
+ # define AP_BATT_CURR_PIN                  12
+ # define AP_BATT_VOLTDIVIDER_DEFAULT       10.1
+ # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT  17.0
+#elif CONFIG_HAL_BOARD == HAL_BOARD_FLYMAPLE
+// Flymaple board pin 20 is connected to the external battery supply
+// via a 24k/5.1k voltage divider. The schematic claims the divider is 25k/5k, 
+// but the actual installed resistors are not so.
+// So the divider ratio is 5.70588 = (24000+5100)/5100
+ # define AP_BATT_VOLT_PIN                  20
+ # define AP_BATT_CURR_PIN                  19
+ # define AP_BATT_VOLTDIVIDER_DEFAULT       5.70588
+ # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT  17.0
+#elif CONFIG_HAL_BOARD == HAL_BOARD_PX4 && defined(CONFIG_ARCH_BOARD_PX4FMU_V1)
+ // px4
+ # define AP_BATT_VOLT_PIN                  100
+ # define AP_BATT_CURR_PIN                  101
+ # define AP_BATT_VOLTDIVIDER_DEFAULT       1.1
+ # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT  17.0
+#elif CONFIG_HAL_BOARD == HAL_BOARD_PX4 && defined(CONFIG_ARCH_BOARD_PX4FMU_V2)
+ // pixhawk
+ # define AP_BATT_VOLT_PIN                  2
+ # define AP_BATT_CURR_PIN                  3
+ # define AP_BATT_VOLTDIVIDER_DEFAULT       10.1
+ # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT  17.0
+#elif CONFIG_HAL_BOARD == HAL_BOARD_AVR_SITL
+ # define AP_BATT_VOLT_PIN                  13
+ # define AP_BATT_CURR_PIN                  12
+ # define AP_BATT_VOLTDIVIDER_DEFAULT       10.1
+ # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT  17.0
+#else
+ # define AP_BATT_VOLT_PIN                  -1
+ # define AP_BATT_CURR_PIN                  -1
+ # define AP_BATT_VOLTDIVIDER_DEFAULT       10.1
+ # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT  17.0
 #endif
 
-#ifndef HAL_BATTMON_FUEL_ENABLE
-#define HAL_BATTMON_FUEL_ENABLE 1
-#endif
+// Other values normally set directly by mission planner
+// # define AP_BATT_VOLTDIVIDER_DEFAULT 15.70   // Volt divider for AttoPilot 50V/90A sensor
+// # define AP_BATT_VOLTDIVIDER_DEFAULT 4.127   // Volt divider for AttoPilot 13.6V/45A sensor
+// # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT 27.32  // Amp/Volt for AttoPilot 50V/90A sensor
+// # define AP_BATT_CURR_AMP_PERVOLT_DEFAULT 13.66  // Amp/Volt for AttoPilot 13.6V/45A sensor
 
-// declare backend class
-class AP_BattMonitor_Backend;
-class AP_BattMonitor_Analog;
-class AP_BattMonitor_SMBus;
-class AP_BattMonitor_SMBus_Solo;
-class AP_BattMonitor_SMBus_Generic;
-class AP_BattMonitor_SMBus_Maxell;
-class AP_BattMonitor_UAVCAN;
-class AP_BattMonitor_Generator;
+#define AP_BATT_CAPACITY_DEFAULT            3300
+#define AP_BATT_LOW_VOLT_TIMEOUT_MS         10000   // low voltage of 10 seconds will cause battery_exhausted to return true
 
 class AP_BattMonitor
 {
-    friend class AP_BattMonitor_Backend;
-    friend class AP_BattMonitor_Analog;
-    friend class AP_BattMonitor_SMBus;
-    friend class AP_BattMonitor_SMBus_Solo;
-    friend class AP_BattMonitor_SMBus_Generic;
-    friend class AP_BattMonitor_SMBus_Maxell;
-    friend class AP_BattMonitor_UAVCAN;
-    friend class AP_BattMonitor_Sum;
-    friend class AP_BattMonitor_FuelFlow;
-    friend class AP_BattMonitor_FuelLevel_PWM;
-    friend class AP_BattMonitor_Generator;
-
 public:
 
-    // battery failsafes must be defined in levels of severity so that vehicles wont fall backwards
-    enum BatteryFailsafe {
-        BatteryFailsafe_None = 0,
-        BatteryFailsafe_Low,
-        BatteryFailsafe_Critical
-    };
+    /// Constructor
+    AP_BattMonitor();
 
-    FUNCTOR_TYPEDEF(battery_failsafe_handler_fn_t, void, const char *, const int8_t);
-
-    AP_BattMonitor(uint32_t log_battery_bit, battery_failsafe_handler_fn_t battery_failsafe_handler_fn, const int8_t *failsafe_priorities);
-
-    /* Do not allow copies */
-    AP_BattMonitor(const AP_BattMonitor &other) = delete;
-    AP_BattMonitor &operator=(const AP_BattMonitor&) = delete;
-
-    static AP_BattMonitor *get_singleton() {
-        return _singleton;
-    }
-
-    // cell voltages in millivolts
-    struct cells {
-        uint16_t cells[AP_BATT_MONITOR_CELLS_MAX];
-    };
-
-    // The BattMonitor_State structure is filled in by the backend driver
-    struct BattMonitor_State {
-        cells       cell_voltages;             // battery cell voltages in millivolts, 10 cells matches the MAVLink spec
-        float       voltage;                   // voltage in volts
-        float       current_amps;              // current in amperes
-        float       consumed_mah;              // total current draw in milliamp hours since start-up
-        float       consumed_wh;               // total energy consumed in Wh since start-up
-        uint32_t    last_time_micros;          // time when voltage and current was last read in microseconds
-        uint32_t    low_voltage_start_ms;      // time when voltage dropped below the minimum in milliseconds
-        uint32_t    critical_voltage_start_ms; // critical voltage failsafe start timer in milliseconds
-        float       temperature;               // battery temperature in degrees Celsius
-        uint32_t    temperature_time;          // timestamp of the last received temperature message
-        float       voltage_resting_estimate;  // voltage with sag removed based on current and resistance estimate in Volt
-        float       resistance;                // resistance, in Ohms, calculated by comparing resting voltage vs in flight voltage
-        BatteryFailsafe failsafe;              // stage failsafe the battery is in
-        bool        healthy;                   // battery monitor is communicating correctly
-        bool        is_powering_off;           // true when power button commands power off
-        bool        powerOffNotified;          // only send powering off notification once
-    };
-
-    // Return the number of battery monitor instances
-    uint8_t num_instances(void) const { return _num_instances; }
-
-    // detect and initialise any available battery monitors
+    /// Initialize the battery monitor
     void init();
 
-    /// Read the battery voltage and current for all batteries.  Should be called at 10hz
+    /// Read the battery voltage and current.  Should be called at 10hz
     void read();
 
-    // healthy - returns true if monitor is functioning
-    bool healthy(uint8_t instance) const;
-    bool healthy() const { return healthy(AP_BATT_PRIMARY_INSTANCE); }
+    /// monitoring - returns whether we are monitoring voltage only or voltage and current
+    int8_t monitoring() const { return _monitoring; }
 
-    /// voltage - returns battery voltage in volts
-    float voltage(uint8_t instance) const;
-    float voltage() const { return voltage(AP_BATT_PRIMARY_INSTANCE); }
+    /// monitoring - returns whether we are monitoring voltage only or voltage and current
+    void set_monitoring(uint8_t mon) { _monitoring.set(mon); }
 
-    /// get voltage with sag removed (based on battery current draw and resistance)
-    /// this will always be greater than or equal to the raw voltage
-    float voltage_resting_estimate(uint8_t instance) const;
-    float voltage_resting_estimate() const { return voltage_resting_estimate(AP_BATT_PRIMARY_INSTANCE); }
+    /// Battery voltage.  Initialized to 99 to prevent low voltage events at startup
+    float voltage() const { return _voltage; }
 
-    /// current_amps - returns the instantaneous current draw in amperes
-    bool current_amps(float &current, const uint8_t instance = AP_BATT_PRIMARY_INSTANCE) const WARN_IF_UNUSED;
+    /// Battery pack instantaneous currrent draw in amperes
+    float current_amps() const { return _current_amps; }
 
-    /// consumed_mah - returns total current drawn since start-up in milliampere.hours
-    bool consumed_mah(float &mah, const uint8_t instance = AP_BATT_PRIMARY_INSTANCE) const WARN_IF_UNUSED;
-
-    /// consumed_wh - returns total energy drawn since start-up in watt.hours
-    bool consumed_wh(float&wh, const uint8_t instance = AP_BATT_PRIMARY_INSTANCE) const WARN_IF_UNUSED;
+    /// Total current drawn since start-up (Amp-hours)
+    float current_total_mah() const { return _current_total_mah; }
 
     /// capacity_remaining_pct - returns the % battery capacity remaining (0 ~ 100)
-    virtual uint8_t capacity_remaining_pct(uint8_t instance) const;
-    uint8_t capacity_remaining_pct() const { return capacity_remaining_pct(AP_BATT_PRIMARY_INSTANCE); }
+    uint8_t capacity_remaining_pct() const;
 
-    /// pack_capacity_mah - returns the capacity of the battery pack in mAh when the pack is full
-    int32_t pack_capacity_mah(uint8_t instance) const;
-    int32_t pack_capacity_mah() const { return pack_capacity_mah(AP_BATT_PRIMARY_INSTANCE); }
- 
-    /// returns true if a battery failsafe has ever been triggered
-    bool has_failsafed(void) const { return _has_triggered_failsafe; };
-
-    /// returns the highest failsafe action that has been triggered
-    int8_t get_highest_failsafe_priority(void) const { return _highest_failsafe_priority; };
-
-    /// get_type - returns battery monitor type
-    enum AP_BattMonitor_Params::BattMonitor_Type get_type() const { return get_type(AP_BATT_PRIMARY_INSTANCE); }
-    enum AP_BattMonitor_Params::BattMonitor_Type get_type(uint8_t instance) const { return _params[instance].type(); }
-
-    /// true when (voltage * current) > watt_max
-    bool overpower_detected() const;
-    bool overpower_detected(uint8_t instance) const;
-
-    // cell voltages in millivolts
-    bool has_cell_voltages() { return has_cell_voltages(AP_BATT_PRIMARY_INSTANCE); }
-    bool has_cell_voltages(const uint8_t instance) const;
-    const cells &get_cell_voltages() const { return get_cell_voltages(AP_BATT_PRIMARY_INSTANCE); }
-    const cells &get_cell_voltages(const uint8_t instance) const;
-
-    // temperature
-    bool get_temperature(float &temperature) const { return get_temperature(temperature, AP_BATT_PRIMARY_INSTANCE); }
-    bool get_temperature(float &temperature, const uint8_t instance) const;
-
-    // cycle count
-    bool get_cycle_count(uint8_t instance, uint16_t &cycles) const;
-
-    // get battery resistance estimate in ohms
-    float get_resistance() const { return get_resistance(AP_BATT_PRIMARY_INSTANCE); }
-    float get_resistance(uint8_t instance) const { return state[instance].resistance; }
-
-    // returns false if we fail arming checks, in which case the buffer will be populated with a failure message
-    bool arming_checks(size_t buflen, char *buffer) const;
-
-    // sends powering off mavlink broadcasts and sets notify flag
-    void checkPoweringOff(void);
-
-    // reset battery remaining percentage
-    bool reset_remaining(uint16_t battery_mask, float percentage);
+    /// exhausted - returns true if the voltage remains below the low_voltage for 10 seconds or remaining capacity falls below min_capacity
+    bool exhausted(float low_voltage, float min_capacity_mah);
 
     static const struct AP_Param::GroupInfo var_info[];
 
 protected:
 
     /// parameters
-    AP_BattMonitor_Params _params[AP_BATT_MONITOR_MAX_INSTANCES];
+    AP_Int8     _monitoring;                /// 0=disabled, 3=voltage only, 4=voltage and current
+    AP_Int8     _volt_pin;                  /// board pin used to measure battery voltage
+    AP_Int8     _curr_pin;                  /// board pin used to measure battery current
+    AP_Float    _volt_multiplier;           /// voltage on volt pin multiplied by this to calculate battery voltage
+    AP_Float    _curr_amp_per_volt;         /// voltage on current pin multiplied by this to calculate current in amps
+    AP_Float    _curr_amp_offset;           /// offset voltage that is subtracted from current pin before conversion to amps
+    AP_Int32    _pack_capacity;             /// battery pack capacity less reserve in mAh
 
-private:
-    static AP_BattMonitor *_singleton;
+    /// internal variables
+    float       _voltage;                   /// last read voltage
+    float       _current_amps;              /// last read current drawn
+    float       _current_total_mah;         /// total current drawn since startup (Amp-hours)
+    uint32_t    _last_time_micros;          /// time when current was last read
+    uint32_t    _low_voltage_start_ms;      /// time when voltage dropped below the minimum
 
-    BattMonitor_State state[AP_BATT_MONITOR_MAX_INSTANCES];
-    AP_BattMonitor_Backend *drivers[AP_BATT_MONITOR_MAX_INSTANCES];
-    uint32_t    _log_battery_bit;
-    uint8_t     _num_instances;                                     /// number of monitors
-
-    void convert_params(void);
-
-    /// returns the failsafe state of the battery
-    BatteryFailsafe check_failsafe(const uint8_t instance);
-    void check_failsafes(void); // checks all batteries failsafes
-
-    battery_failsafe_handler_fn_t _battery_failsafe_handler_fn;
-    const int8_t *_failsafe_priorities; // array of failsafe priorities, sorted highest to lowest priority, -1 indicates no more entries
-
-    int8_t      _highest_failsafe_priority; // highest selected failsafe action level (used to restrict what actions we move into)
-    bool        _has_triggered_failsafe;  // true after a battery failsafe has been triggered for the first time
+    AP_HAL::AnalogSource *_volt_pin_analog_source;
+    AP_HAL::AnalogSource *_curr_pin_analog_source;
 
 };
-
-namespace AP {
-    AP_BattMonitor &battery();
-};
+#endif  // AP_BATTMONITOR_H
